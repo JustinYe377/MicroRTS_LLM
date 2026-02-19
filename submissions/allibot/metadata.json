@@ -1,0 +1,9 @@
+{
+  "team_name": "allibot",
+  "display_name": "AlliBot",
+  "agent_class": "alli",
+  "agent_file": "alli.java",
+  "model_provider": "none",
+  "model_name": "none",
+  "description": "Rule-based MicroRTS bot with adaptive economy, barracks/production control, and combat target scoring."
+}
