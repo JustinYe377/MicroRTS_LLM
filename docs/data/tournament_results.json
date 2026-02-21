@@ -1,5 +1,5 @@
 {
-  "generated": "2026-02-18T21:26:50.681019",
+  "generated": "2026-02-21T17:13:05.436110",
   "anchors": [
     "RandomBiasedAI",
     "HeavyRush",
@@ -555,6 +555,96 @@
       }
     },
     {
+      "source": "tournament",
+      "source_file": "tournament_2026-02-21_17-12.json",
+      "team_name": "allibot",
+      "display_name": "AlliBot",
+      "model_provider": "none",
+      "model_name": "none",
+      "agent_type": "submission",
+      "score": 54.0,
+      "grade": "D",
+      "eliminated_at": "WorkerRush",
+      "date": "2026-02-21T17:12:57.624572",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "source": "tournament",
+      "source_file": "tournament_2026-02-21_17-12.json",
+      "team_name": "example-team",
+      "display_name": "Example Team",
+      "model_provider": "none",
+      "model_name": "none",
+      "agent_type": "submission",
+      "score": 54.0,
+      "grade": "D",
+      "eliminated_at": "WorkerRush",
+      "date": "2026-02-21T17:12:57.624572",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
       "source": "benchmark",
       "team_name": null,
       "display_name": "gemini-2.5-flash",
@@ -741,6 +831,22 @@
   ],
   "history": [
     {
+      "display_name": "AlliBot",
+      "score": 54.0,
+      "grade": "D",
+      "date": "2026-02-21T17:12:57.624572",
+      "source": "tournament",
+      "map": "maps/8x8/basesWorkers8x8.xml"
+    },
+    {
+      "display_name": "Example Team",
+      "score": 54.0,
+      "grade": "D",
+      "date": "2026-02-21T17:12:57.624572",
+      "source": "tournament",
+      "map": "maps/8x8/basesWorkers8x8.xml"
+    },
+    {
       "display_name": "deepseek-chat (Search+LLM)",
       "score": 96.0,
       "grade": "A+",
@@ -885,5 +991,20 @@
       "map": "maps/8x8/basesWorkers8x8.xml"
     }
   ],
-  "head_to_head": {}
+  "head_to_head": {
+    "AlliBot": {
+      "Example Team": {
+        "wins": 0,
+        "losses": 1,
+        "draws": 0
+      }
+    },
+    "Example Team": {
+      "AlliBot": {
+        "wins": 1,
+        "losses": 0,
+        "draws": 0
+      }
+    }
+  }
 }
