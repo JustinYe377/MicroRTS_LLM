@@ -36,7 +36,7 @@ from pathlib import Path
 # Configuration
 CONFIG_FILE = "resources/config.properties"
 RESULTS_DIR = "benchmark_results"
-MAX_CYCLES = 3000  # Increased for cloud API testing
+MAX_CYCLES = 1500  # Increased for cloud API testing
 MAP = "maps/8x8/basesWorkers8x8.xml"
 GAME_TIMEOUT = 900  # 15 minutes per game (hard opponents play longer)
 
@@ -82,13 +82,13 @@ ANCHORS = {
 LLMS = {}
 
 # Gemini - only include if API key is available
-if os.environ.get("GEMINI_API_KEY"):
-    LLMS["ai.abstraction.LLM_Gemini"] = {
-        "name": "gemini",
-        "display": "gemini-2.5-flash (PureLLM)",
-        "agent_type": "PureLLM",
-        "env": {"GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", "")}
-    }
+#if os.environ.get("GEMINI_API_KEY"):
+#    LLMS["ai.abstraction.LLM_Gemini"] = {
+#        "name": "gemini",
+#        "display": "gemini-2.5-flash (PureLLM)",
+#        "agent_type": "PureLLM",
+#        "env": {"GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", "")}
+#    }
 
 # DeepSeek Cloud API - only include if API key is available
 if os.environ.get("DEEPSEEK_API_KEY"):
