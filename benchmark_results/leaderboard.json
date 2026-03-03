@@ -610,6 +610,814 @@
         }
       },
       "source_file": "benchmark_2026-02-04_17-16.json"
+    },
+    {
+      "model": "deepseek-r1:8b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 5.0,
+      "version": "2.0",
+      "date": "2026-02-16T19:59:07.362657",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 1,
+          "losses": 0,
+          "avg_game_score": 0.5,
+          "weighted_points": 5.0
+        }
+      }
+    },
+    {
+      "model": "qwen3:4b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-16T19:59:07.362657",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:8b (Hybrid)",
+      "agent_type": "Hybrid",
+      "score": 69.0,
+      "version": "2.0",
+      "date": "2026-02-16T19:59:07.362657",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.0,
+          "weighted_points": 15.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:8b (Search+LLM)",
+      "agent_type": "Search+LLM",
+      "score": 72.0,
+      "version": "2.0",
+      "date": "2026-02-16T19:59:07.362657",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:8b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 5.0,
+      "version": "2.0",
+      "date": "2026-02-16T20:48:32.713665",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 1,
+          "losses": 0,
+          "avg_game_score": 0.5,
+          "weighted_points": 5.0
+        }
+      }
+    },
+    {
+      "model": "qwen3:4b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-16T20:48:32.713665",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:8b (Hybrid)",
+      "agent_type": "Hybrid",
+      "score": 69.0,
+      "version": "2.0",
+      "date": "2026-02-16T20:48:32.713665",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.0,
+          "weighted_points": 15.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:8b (Search+LLM)",
+      "agent_type": "Search+LLM",
+      "score": 54.0,
+      "version": "2.0",
+      "date": "2026-02-16T20:48:32.713665",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:1.5b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 5.0,
+      "version": "2.0",
+      "date": "2026-02-16T21:19:11.030739",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 1,
+          "losses": 0,
+          "avg_game_score": 0.5,
+          "weighted_points": 5.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:8b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 5.0,
+      "version": "2.0",
+      "date": "2026-02-16T21:19:11.030739",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 1,
+          "losses": 0,
+          "avg_game_score": 0.5,
+          "weighted_points": 5.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:1.5b (Hybrid)",
+      "agent_type": "Hybrid",
+      "score": 54.0,
+      "version": "2.0",
+      "date": "2026-02-16T21:19:11.030739",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-r1:1.5b (Search+LLM)",
+      "agent_type": "Search+LLM",
+      "score": 96.0,
+      "version": "2.0",
+      "date": "2026-02-16T21:19:11.030739",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "Tiamat": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "CoacAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-chat (PureLLM-Cloud)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-16T22:30:43.737035",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-16T22:30:43.737035",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "qwen3:4b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-16T22:30:43.737035",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (Hybrid)",
+      "agent_type": "Hybrid",
+      "score": 72.0,
+      "version": "2.0",
+      "date": "2026-02-16T22:30:43.737035",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (Search+LLM)",
+      "agent_type": "Search+LLM",
+      "score": 54.0,
+      "version": "2.0",
+      "date": "2026-02-16T22:30:43.737035",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-chat (PureLLM-Cloud)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-16T23:18:53.183494",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-16T23:18:53.183494",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "qwen3:4b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-16T23:18:53.183494",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (Hybrid)",
+      "agent_type": "Hybrid",
+      "score": 72.0,
+      "version": "2.0",
+      "date": "2026-02-16T23:18:53.183494",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (Search+LLM)",
+      "agent_type": "Search+LLM",
+      "score": 96.0,
+      "version": "2.0",
+      "date": "2026-02-16T23:18:53.183494",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "Tiamat": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "CoacAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "deepseek-chat (PureLLM-Cloud)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-17T00:02:29.623020",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-17T00:02:29.623020",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "qwen3:4b (PureLLM)",
+      "agent_type": "PureLLM",
+      "score": 0.0,
+      "version": "2.0",
+      "date": "2026-02-17T00:02:29.623020",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (Hybrid)",
+      "agent_type": "Hybrid",
+      "score": 72.0,
+      "version": "2.0",
+      "date": "2026-02-17T00:02:29.623020",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
+    },
+    {
+      "model": "llama3.1:8b (Search+LLM)",
+      "agent_type": "Search+LLM",
+      "score": 54.0,
+      "version": "2.0",
+      "date": "2026-02-17T00:02:29.623020",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      }
     }
   ]
 }

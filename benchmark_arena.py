@@ -19,6 +19,8 @@ Usage:
 
 Environment Variables:
     GEMINI_API_KEY - Required for Gemini models
+    DEEPSEEK_API_KEY - Required for DeepSeek cloud models
+    DEEPSEEK_MODEL - Model for DeepSeek cloud (default: deepseek-chat)
     OLLAMA_MODEL - Model for ai.abstraction.ollama (default: llama3.1:8b)
     OLLAMA_MODEL_P2 - Model for ai.abstraction.ollama2 (default: qwen3:4b)
 """
@@ -34,7 +36,7 @@ from pathlib import Path
 # Configuration
 CONFIG_FILE = "resources/config.properties"
 RESULTS_DIR = "benchmark_results"
-MAX_CYCLES = 1500  # Further reduced for quick benchmarks
+MAX_CYCLES = 3000  # Increased for cloud API testing
 MAP = "maps/8x8/basesWorkers8x8.xml"
 GAME_TIMEOUT = 900  # 15 minutes per game (hard opponents play longer)
 
@@ -86,6 +88,19 @@ if os.environ.get("GEMINI_API_KEY"):
         "display": "gemini-2.5-flash (PureLLM)",
         "agent_type": "PureLLM",
         "env": {"GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", "")}
+    }
+
+# DeepSeek Cloud API - only include if API key is available
+if os.environ.get("DEEPSEEK_API_KEY"):
+    _deepseek_model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+    LLMS["ai.abstraction.LLM_DeepSeek"] = {
+        "name": "deepseek-cloud",
+        "display": f"{_deepseek_model} (PureLLM-Cloud)",
+        "agent_type": "PureLLM",
+        "env": {
+            "DEEPSEEK_API_KEY": os.environ.get("DEEPSEEK_API_KEY", ""),
+            "DEEPSEEK_MODEL": _deepseek_model
+        }
     }
 
 LLMS.update({

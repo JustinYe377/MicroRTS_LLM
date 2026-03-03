@@ -1,0 +1,337 @@
+{
+  "version": "2.0",
+  "format": "single-elimination",
+  "date": "2026-02-17T00:02:29.623020",
+  "config": {
+    "map": "maps/8x8/basesWorkers8x8.xml",
+    "max_cycles": 3000,
+    "games_per_matchup": 1
+  },
+  "anchors": {
+    "ai.RandomBiasedAI": {
+      "name": "RandomBiasedAI",
+      "weight": 10,
+      "tier": "easy"
+    },
+    "ai.abstraction.HeavyRush": {
+      "name": "HeavyRush",
+      "weight": 20,
+      "tier": "medium-hard"
+    },
+    "ai.abstraction.LightRush": {
+      "name": "LightRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.abstraction.WorkerRush": {
+      "name": "WorkerRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.competition.tiamat.Tiamat": {
+      "name": "Tiamat",
+      "weight": 20,
+      "tier": "hard"
+    },
+    "ai.coac.CoacAI": {
+      "name": "CoacAI",
+      "weight": 20,
+      "tier": "hard"
+    }
+  },
+  "benchmark_scores": {
+    "deepseek-chat (PureLLM-Cloud)": 0.0,
+    "llama3.1:8b (PureLLM)": 0.0,
+    "qwen3:4b (PureLLM)": 0.0,
+    "llama3.1:8b (Hybrid)": 72.0,
+    "llama3.1:8b (Search+LLM)": 54.0
+  },
+  "eliminated_at": {
+    "deepseek-chat (PureLLM-Cloud)": "RandomBiasedAI",
+    "llama3.1:8b (PureLLM)": "RandomBiasedAI",
+    "qwen3:4b (PureLLM)": "RandomBiasedAI",
+    "llama3.1:8b (Hybrid)": "Tiamat",
+    "llama3.1:8b (Search+LLM)": "WorkerRush"
+  },
+  "opponent_breakdown": {
+    "deepseek-chat (PureLLM-Cloud)": {
+      "RandomBiasedAI": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "llama3.1:8b (PureLLM)": {
+      "RandomBiasedAI": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "qwen3:4b (PureLLM)": {
+      "RandomBiasedAI": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "llama3.1:8b (Hybrid)": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "Tiamat": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "llama3.1:8b (Search+LLM)": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    }
+  },
+  "detailed_results": {
+    "deepseek-chat (PureLLM-Cloud)": {
+      "reference_games": {
+        "ai.RandomBiasedAI": [
+          {
+            "result": "loss",
+            "ticks": 1225,
+            "game_num": 1,
+            "opponent": "RandomBiasedAI"
+          }
+        ]
+      },
+      "llm_games": []
+    },
+    "llama3.1:8b (PureLLM)": {
+      "reference_games": {
+        "ai.RandomBiasedAI": [
+          {
+            "result": "loss",
+            "ticks": 875,
+            "game_num": 1,
+            "opponent": "RandomBiasedAI"
+          }
+        ]
+      },
+      "llm_games": []
+    },
+    "qwen3:4b (PureLLM)": {
+      "reference_games": {
+        "ai.RandomBiasedAI": [
+          {
+            "result": "loss",
+            "ticks": 860,
+            "game_num": 1,
+            "opponent": "RandomBiasedAI"
+          }
+        ]
+      },
+      "llm_games": []
+    },
+    "llama3.1:8b (Hybrid)": {
+      "reference_games": {
+        "ai.RandomBiasedAI": [
+          {
+            "result": "win",
+            "ticks": 370,
+            "game_num": 1,
+            "opponent": "RandomBiasedAI"
+          }
+        ],
+        "ai.abstraction.HeavyRush": [
+          {
+            "result": "win",
+            "ticks": 195,
+            "game_num": 1,
+            "opponent": "HeavyRush"
+          }
+        ],
+        "ai.abstraction.LightRush": [
+          {
+            "result": "win",
+            "ticks": 195,
+            "game_num": 1,
+            "opponent": "LightRush"
+          }
+        ],
+        "ai.abstraction.WorkerRush": [
+          {
+            "result": "win",
+            "ticks": 1365,
+            "game_num": 1,
+            "opponent": "WorkerRush"
+          }
+        ],
+        "ai.competition.tiamat.Tiamat": [
+          {
+            "result": "loss",
+            "ticks": 1240,
+            "game_num": 1,
+            "opponent": "Tiamat"
+          }
+        ]
+      },
+      "llm_games": []
+    },
+    "llama3.1:8b (Search+LLM)": {
+      "reference_games": {
+        "ai.RandomBiasedAI": [
+          {
+            "result": "win",
+            "ticks": 680,
+            "game_num": 1,
+            "opponent": "RandomBiasedAI"
+          }
+        ],
+        "ai.abstraction.HeavyRush": [
+          {
+            "result": "win",
+            "ticks": 270,
+            "game_num": 1,
+            "opponent": "HeavyRush"
+          }
+        ],
+        "ai.abstraction.LightRush": [
+          {
+            "result": "win",
+            "ticks": 578,
+            "game_num": 1,
+            "opponent": "LightRush"
+          }
+        ],
+        "ai.abstraction.WorkerRush": [
+          {
+            "result": "loss",
+            "ticks": 190,
+            "game_num": 1,
+            "opponent": "WorkerRush"
+          }
+        ]
+      },
+      "llm_games": []
+    }
+  },
+  "head_to_head": [
+    {
+      "result": "win",
+      "ticks": 380,
+      "player0": "deepseek-chat (PureLLM-Cloud)",
+      "player1": "llama3.1:8b (PureLLM)"
+    },
+    {
+      "result": "win",
+      "ticks": 480,
+      "player0": "deepseek-chat (PureLLM-Cloud)",
+      "player1": "qwen3:4b (PureLLM)"
+    },
+    {
+      "result": "loss",
+      "ticks": 280,
+      "player0": "deepseek-chat (PureLLM-Cloud)",
+      "player1": "llama3.1:8b (Hybrid)"
+    },
+    {
+      "result": "loss",
+      "ticks": 430,
+      "player0": "deepseek-chat (PureLLM-Cloud)",
+      "player1": "llama3.1:8b (Search+LLM)"
+    },
+    {
+      "result": "draw",
+      "ticks": 3000,
+      "player0": "llama3.1:8b (PureLLM)",
+      "player1": "qwen3:4b (PureLLM)"
+    },
+    {
+      "result": "loss",
+      "ticks": 185,
+      "player0": "llama3.1:8b (PureLLM)",
+      "player1": "llama3.1:8b (Hybrid)"
+    },
+    {
+      "result": "loss",
+      "ticks": 345,
+      "player0": "llama3.1:8b (PureLLM)",
+      "player1": "llama3.1:8b (Search+LLM)"
+    },
+    {
+      "result": "loss",
+      "ticks": 185,
+      "player0": "qwen3:4b (PureLLM)",
+      "player1": "llama3.1:8b (Hybrid)"
+    },
+    {
+      "result": "loss",
+      "ticks": 275,
+      "player0": "qwen3:4b (PureLLM)",
+      "player1": "llama3.1:8b (Search+LLM)"
+    },
+    {
+      "result": "loss",
+      "ticks": 555,
+      "player0": "llama3.1:8b (Hybrid)",
+      "player1": "llama3.1:8b (Search+LLM)"
+    }
+  ]
+}
