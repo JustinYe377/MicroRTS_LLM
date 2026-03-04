@@ -1,0 +1,9 @@
+{
+  "team_name": "boom-or-rush-bot",
+  "display_name": "Boom/Rush Bot",
+  "agent_class": "BoomRushBotOllama",
+  "agent_file": "BoomRushBotOllama.java",
+  "model_provider": "ollama",
+  "model_name": "qwen3.5:9b",
+  "description": "Uses Ollama to choose between WorkerRush, LightRush, and BoomEconomy, then delegates execution to the selected built-in strategy."
+}
