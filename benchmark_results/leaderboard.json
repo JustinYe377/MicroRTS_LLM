@@ -1,5 +1,5 @@
 {
-  "generated": "2026-03-05T14:51:00.787421",
+  "generated": "2026-03-05T21:02:06.771670",
   "description": "Best benchmark score per model across all runs",
   "entries": [
     {
@@ -625,7 +625,7 @@
       "version": "2.0",
       "format": "single-elimination",
       "eliminated_at": "WorkerRush",
-      "date": "2026-03-05T14:27:52.457011",
+      "date": "2026-03-05T21:02:00.939649",
       "map": "maps/8x8/basesWorkers8x8.xml",
       "games_per_matchup": 1,
       "opponents": {
@@ -655,10 +655,10 @@
           "draws": 0,
           "losses": 1,
           "avg_game_score": 0.0,
-          "weighted_points": 0.0
+          "weighted_points": 0
         }
       },
-      "source_file": "benchmark_2026-03-05_14-27.json"
+      "source_file": "benchmark_2026-03-05_21-02.json"
     },
     {
       "model": "Boom/Rush Bot",

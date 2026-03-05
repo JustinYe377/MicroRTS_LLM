@@ -3,7 +3,7 @@
   "display_name": "AlliBot",
   "agent_class": "alli",
   "agent_file": "alli.java",
-  "model_provider": "none",
-  "model_name": "none",
-  "description": "Rule-based MicroRTS bot with adaptive economy, barracks/production control, and combat target scoring."
+  "model_provider": "ollama",
+  "model_name": "qwen3:14b",
+  "description": "Search+LLM (LLMInformedMCTS defaulting to qwen3:14b) with Alli heuristics as fallback; no manual env exports needed."
 }

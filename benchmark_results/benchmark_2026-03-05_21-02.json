@@ -1,0 +1,48 @@
+{
+  "version": "2.0",
+  "format": "single-elimination",
+  "date": "2026-03-05T21:02:00.939649",
+  "config": {
+    "map": "maps/8x8/basesWorkers8x8.xml",
+    "max_cycles": 5000,
+    "games_per_matchup": 1
+  },
+  "benchmark_scores": {
+    "AlliBot": 54.0
+  },
+  "eliminated_at": {
+    "AlliBot": "WorkerRush"
+  },
+  "opponent_breakdown": {
+    "AlliBot": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0
+      }
+    }
+  }
+}

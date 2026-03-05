@@ -2,7 +2,7 @@
 
 Best benchmark score per model across all runs.
 
-*Generated: 2026-03-05 14:51*
+*Generated: 2026-03-05 21:02*
 
 ## Rankings
 
@@ -267,14 +267,14 @@ Best benchmark score per model across all runs.
 - **Format:** single-elimination
 - **Map:** `maps/8x8/basesWorkers8x8.xml`
 - **Games per matchup:** 1
-- **Source:** `benchmark_2026-03-05_14-27.json`
+- **Source:** `benchmark_2026-03-05_21-02.json`
 
 | Opponent | W | D | L | Weighted Pts |
 |----------|---|---|---|-------------|
 | RandomBiasedAI | 1 | 0 | 0 | 12.0 |
 | HeavyRush | 1 | 0 | 0 | 24.0 |
 | LightRush | 1 | 0 | 0 | 18.0 |
-| WorkerRush | 0 | 0 | 1 | 0.0 |
+| WorkerRush | 0 | 0 | 1 | 0 |
 
 ### Boom/Rush Bot - 54.0 pts (D -- eliminated at WorkerRush)
 
