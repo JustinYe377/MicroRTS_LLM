@@ -1,0 +1,9 @@
+{
+  "team_name": "yebot",
+  "display_name": "yebot",
+  "agent_class": "yebot",
+  "agent_file": "yebot.java",
+  "model_provider": "deepseek",
+  "model_name": "deepseek-chat",
+  "description": "PureLLM(Cloud DeepkSeek) with modified Prompt(Economy,Build Military,Attack)"
+}
