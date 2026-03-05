@@ -3,7 +3,7 @@
   "display_name": "xiebot",
   "agent_class": "XieBot",
   "agent_file": "XieBot.java",
-  "model_provider": "none",
-  "model_name": "none",
-  "description": "modified NaiveMCTS agent that uses an early LightRush opening strategy and adaptive search budgeting to improve decision making during gameplay"
+  "model_provider": "ollama",
+  "model_name": "llama3.1:8b",
+  "description": "Hybrid MCTS bot that uses fast local Ollama-guided macro strategy switching to adapt rollouts, time budget, and aggression with safe fallback when LLM is unavailable."
 }
