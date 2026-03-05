@@ -57,9 +57,11 @@
                 <tr><td><code>agent_class</code></td><td>Java class name (must match filename)</td></tr>
                 <tr><td><code>agent_file</code></td><td>Java source file</td></tr>
                 <tr><td><code>model_provider</code></td><td><code>ollama</code>, <code>gemini</code>, <code>openai</code>, <code>deepseek</code>, or <code>none</code></td></tr>
-                <tr><td><code>model_name</code></td><td>Model identifier (e.g., <code>llama3.1:8b</code>)</td></tr>
+                <tr><td><code>model_name</code></td><td>Your preferred model identifier (e.g., <code>llama3.1:8b</code>). See note below.</td></tr>
             </tbody>
         </table>
+
+        <p><strong>Model availability note:</strong> You are welcome to specify any preferred model in <code>model_name</code>. However, official competition runs are executed on the organizers' server using locally available models. If your preferred model is not available, your agent will be run with whatever model is on hand &mdash; currently <code>llama3.1:8b</code>. If your model preference differs, note it in your PR description so organizers are aware.</p>
 
         <h2>Step 4: Implement Your Agent</h2>
         <p>Two agent types are supported:</p>
@@ -117,7 +119,42 @@ java -cp "lib/*:bin" rts.MicroRTS -f resources/config.properties
 # Validate your submission
 python3 tournament/validate_submission.py submissions/your-team-name/</code></pre>
 
-        <h2>Step 6: Submit a Pull Request</h2>
+        <h2>Step 6: Include Self-Reported Results (Optional)</h2>
+        <p>You can include a <code>results.json</code> file in your submission folder with benchmark results you ran yourself using your preferred model. This lets reviewers see how your agent performs with a more capable model, and helps distinguish whether a lower official score is a model-capability issue vs. a prompt/strategy issue.</p>
+        <p>Run the benchmark arena against the six built-in leaderboard opponents and fill in the results:</p>
+        <pre><code>export OLLAMA_MODEL="your-preferred-model"
+python3 benchmark_arena.py</code></pre>
+        <p>Then create <code>submissions/your-team-name/results.json</code>:</p>
+        <pre><code>{
+  "self_reported": true,
+  "submitter": "your-team-name",
+  "agent_class": "ai.abstraction.submissions.your_team.YourAgent",
+  "model": "your-preferred-model",
+  "hardware": "e.g. Apple M2 Pro, CPU only",
+  "date": "2026-03-01",
+  "notes": "Optional notes about your setup.",
+
+  "version": "2.0",
+  "format": "single-elimination",
+  "map": "maps/8x8/basesWorkers8x8.xml",
+  "max_cycles": 5000,
+  "games_per_matchup": 1,
+
+  "score": 69.0,
+  "grade": "C",
+  "eliminated_at": "Tiamat",
+
+  "opponents": {
+    "RandomBiasedAI": { "wins": 1, "draws": 0, "losses": 0, "avg_game_score": 1.2, "weighted_points": 12.0 },
+    "HeavyRush":      { "wins": 1, "draws": 0, "losses": 0, "avg_game_score": 1.1, "weighted_points": 22.0 },
+    "LightRush":      { "wins": 1, "draws": 0, "losses": 0, "avg_game_score": 1.2, "weighted_points": 18.0 },
+    "WorkerRush":     { "wins": 1, "draws": 0, "losses": 0, "avg_game_score": 1.0, "weighted_points": 15.0 },
+    "Tiamat":         { "wins": 0, "draws": 0, "losses": 1, "avg_game_score": 0.0, "weighted_points": 0.0  }
+  }
+}</code></pre>
+        <p>Self-reported results are <strong>not verified</strong> and are separate from official scores. Only report results against the six built-in leaderboard opponents, not against other submissions. See <code>src/ai/abstraction/submissions/example_team/results.json</code> for a complete example.</p>
+
+        <h2>Step 7: Submit a Pull Request</h2>
         <p>Push your changes and open a PR against the <code>master</code> branch. Your PR should only contain files inside <code>submissions/your-team-name/</code>.</p>
         <p>Maintainers will review your submission for security compliance and add it to the next tournament run.</p>
 
