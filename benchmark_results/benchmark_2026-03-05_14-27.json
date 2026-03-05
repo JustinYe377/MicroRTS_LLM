@@ -1,0 +1,325 @@
+{
+  "version": "2.0",
+  "format": "single-elimination",
+  "date": "2026-03-05T14:27:52.457011",
+  "config": {
+    "map": "maps/8x8/basesWorkers8x8.xml",
+    "max_cycles": 1500,
+    "games_per_matchup": 1
+  },
+  "anchors": {
+    "ai.RandomBiasedAI": {
+      "name": "RandomBiasedAI",
+      "weight": 10,
+      "tier": "easy"
+    },
+    "ai.abstraction.HeavyRush": {
+      "name": "HeavyRush",
+      "weight": 20,
+      "tier": "medium-hard"
+    },
+    "ai.abstraction.LightRush": {
+      "name": "LightRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.abstraction.WorkerRush": {
+      "name": "WorkerRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.competition.tiamat.Tiamat": {
+      "name": "Tiamat",
+      "weight": 20,
+      "tier": "hard"
+    },
+    "ai.coac.CoacAI": {
+      "name": "CoacAI",
+      "weight": 20,
+      "tier": "hard"
+    }
+  },
+  "benchmark_scores": {
+    "CRush": 89.0,
+    "HOPE": 69.0,
+    "AlliBot": 54.0,
+    "Boom/Rush Bot": 54.0,
+    "Chase": 54.0,
+    "Example Team": 54.0,
+    "jmurr": 11.0,
+    "Nick MCTS": 5.0,
+    "PenguinBot": 5.0,
+    "xiebot": 0.0,
+    "yebot": 0.0
+  },
+  "eliminated_at": {
+    "CRush": "CoacAI",
+    "HOPE": "Tiamat",
+    "AlliBot": "WorkerRush",
+    "Boom/Rush Bot": "WorkerRush",
+    "Chase": "WorkerRush",
+    "Example Team": "WorkerRush",
+    "jmurr": "HeavyRush",
+    "Nick MCTS": "RandomBiasedAI",
+    "PenguinBot": "RandomBiasedAI",
+    "xiebot": "RandomBiasedAI",
+    "yebot": "RandomBiasedAI"
+  },
+  "opponent_breakdown": {
+    "CRush": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.0,
+        "weighted_points": 15.0
+      },
+      "Tiamat": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.0,
+        "weighted_points": 20.0
+      },
+      "CoacAI": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "HOPE": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.0,
+        "weighted_points": 15.0
+      },
+      "Tiamat": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "AlliBot": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "Boom/Rush Bot": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "Chase": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "Example Team": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 12.0
+      },
+      "HeavyRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 24.0
+      },
+      "LightRush": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.2,
+        "weighted_points": 18.0
+      },
+      "WorkerRush": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "jmurr": {
+      "RandomBiasedAI": {
+        "wins": 1,
+        "draws": 0,
+        "losses": 0,
+        "avg_game_score": 1.1,
+        "weighted_points": 11.0
+      },
+      "HeavyRush": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "Nick MCTS": {
+      "RandomBiasedAI": {
+        "wins": 0,
+        "draws": 1,
+        "losses": 0,
+        "avg_game_score": 0.5,
+        "weighted_points": 5.0
+      }
+    },
+    "PenguinBot": {
+      "RandomBiasedAI": {
+        "wins": 0,
+        "draws": 1,
+        "losses": 0,
+        "avg_game_score": 0.5,
+        "weighted_points": 5.0
+      }
+    },
+    "xiebot": {
+      "RandomBiasedAI": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    },
+    "yebot": {
+      "RandomBiasedAI": {
+        "wins": 0,
+        "draws": 0,
+        "losses": 1,
+        "avg_game_score": 0.0,
+        "weighted_points": 0.0
+      }
+    }
+  },
+  "detailed_results": {},
+  "head_to_head": []
+}
