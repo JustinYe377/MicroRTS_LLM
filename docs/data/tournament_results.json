@@ -1,5 +1,5 @@
 {
-  "generated": "2026-02-26T21:18:12.400948",
+  "generated": "2026-03-03T14:25:33.259169",
   "anchors": [
     "RandomBiasedAI",
     "HeavyRush",
@@ -869,6 +869,31 @@
       "last_updated": "2026-02-26T21:17:03.833506"
     },
     {
+      "source": "tournament",
+      "source_file": "tournament_2026-03-03_14-24.json",
+      "team_name": "penguin-bot",
+      "display_name": "PenguinBot",
+      "model_provider": "ollama",
+      "model_name": "llama3.1:8b",
+      "agent_type": "submission",
+      "score": 5.0,
+      "grade": "F",
+      "eliminated_at": "RandomBiasedAI",
+      "date": "2026-03-03T14:24:57.152451",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1,
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 1,
+          "losses": 0,
+          "avg_game_score": 0.5,
+          "weighted_points": 5.0
+        }
+      },
+      "last_updated": "2026-03-03T14:24:57.152451"
+    },
+    {
       "source": "benchmark",
       "team_name": null,
       "display_name": "llama3.1:8b (PureLLM)",
@@ -918,6 +943,14 @@
     }
   ],
   "history": [
+    {
+      "display_name": "PenguinBot",
+      "score": 5.0,
+      "grade": "F",
+      "date": "2026-03-03T14:24:57.152451",
+      "source": "tournament",
+      "map": "maps/8x8/basesWorkers8x8.xml"
+    },
     {
       "display_name": "CRush",
       "score": 89.0,

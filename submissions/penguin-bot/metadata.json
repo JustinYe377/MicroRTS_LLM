@@ -1,0 +1,9 @@
+{
+  "team_name": "penguin-bot",
+  "display_name": "PenguinBot",
+  "agent_class": "MCTSAgent",
+  "agent_file": "MCTSAgent.java",
+  "model_provider": "ollama",
+  "model_name": "llama3.1:8b",
+  "description": "NaiveMCTS bot with periodic Ollama strategy guidance to bias exploration and lookahead."
+}
