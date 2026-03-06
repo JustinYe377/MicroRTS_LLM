@@ -3,7 +3,10 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package mayariBot;
+// package mayariBot;
+package ai.abstraction.submissions.mayari_llm;
+
+import com.google.gson.JsonObject;
 
 // 1. import required libraries
 import java.net.URI;
@@ -48,6 +51,7 @@ public class mayari extends AIWithComputationBudget {
 
 // --- PASTE THE STATE VARIABLES HERE ---
     static String MODEL = System.getenv().getOrDefault("OLLAMA_MODEL", "llama3.1:8b");
+    private static final String OLLAMA_HOST = System.getenv().getOrDefault("OLLAMA_HOST", "http://localhost:11434");
     private volatile String currentMacroStrategy = "DEFAULT"; 
     private volatile int llmCooldown = 0;
     private volatile boolean isLlmThinking = false;
@@ -1301,10 +1305,15 @@ public class mayari extends AIWithComputationBudget {
         isLlmThinking = true;
         
         String prompt = buildGameStatePrompt();
-        String jsonPayload = String.format("{\"model\": \"%s\", \"prompt\": \"%s\", \"stream\": false}", MODEL, prompt);
+        // String jsonPayload = String.format("{\"model\": \"%s\", \"prompt\": \"%s\", \"stream\": false}", MODEL, prompt);
+        JsonObject json = new JsonObject();
+        json.addProperty("model", MODEL);
+        json.addProperty("prompt", prompt);
+        json.addProperty("stream", false);
+        String jsonPayload = json.toString();
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:11434/api/generate"))
+                .uri(URI.create(OLLAMA_HOST + "/api/generate"))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
                 .build();

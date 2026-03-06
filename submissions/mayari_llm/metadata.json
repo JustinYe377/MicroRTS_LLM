@@ -1,8 +1,8 @@
 {
   "team_name": "mayari-llm",
   "display_name": "Mayari-LLM",
-  "agent_class": "mayari",
-  "agent_file": "mayari-llm.java",
+  "agent_class": "ai.abstraction.submissions.mayari_llm;",
+  "agent_file": "mayari.java",
   "model_provider": "ollama",
   "model_name": "llama3.1:8b",
   "description": "MayariBot hardcoded with the use of LLM"
