@@ -30,6 +30,14 @@
         .error-msg { color: var(--loss); padding: 1rem 0; }
         .status-legend { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; font-size: 0.8rem; color: var(--text-secondary); }
         .status-legend-item { display: flex; align-items: center; gap: 0.35rem; }
+        #status-table { table-layout: fixed; width: 100%; }
+        #status-table th:nth-child(1) { width: 3.5rem; }
+        #status-table th:nth-child(2) { width: 40%; }
+        #status-table th:nth-child(3) { width: 10%; }
+        #status-table th:nth-child(4) { width: 10%; }
+        #status-table th:nth-child(5) { width: 8rem; }
+        #status-table th:nth-child(6) { width: 8rem; }
+        .title-cell { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -340,7 +348,7 @@ python3 benchmark_arena.py</code></pre>
                 var row = document.createElement('tr');
                 row.innerHTML =
                     '<td><a class="pr-link" href="' + escapeHtml(pr.html_url) + '" target="_blank">#' + pr.number + '</a></td>' +
-                    '<td><a class="pr-link" href="' + escapeHtml(pr.html_url) + '" target="_blank">' + escapeHtml(pr.title) + '</a></td>' +
+                    '<td class="title-cell" title="' + escapeHtml(pr.title) + '"><a class="pr-link" href="' + escapeHtml(pr.html_url) + '" target="_blank">' + escapeHtml(pr.title) + '</a></td>' +
                     '<td class="pr-author"><a class="pr-link" href="' + escapeHtml(pr.user.html_url) + '" target="_blank">' + escapeHtml(pr.user.login) + '</a></td>' +
                     '<td><span class="status-badge ' + status.cls + '">' + escapeHtml(status.label) + '</span></td>' +
                     '<td class="pr-date">' + formatDate(pr.created_at) + '</td>' +
