@@ -8,7 +8,7 @@
  *   - No built-in AIs used anywhere
  *
  * @author Ye
- * Team: yebot_mcts
+ * Team: yebot
  */
 package ai.abstraction.submissions.yebot;
 
@@ -27,7 +27,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.*;
 
-public class yebot_mcts extends AbstractionLayerAI {
+public class yebot extends AbstractionLayerAI {
 
     // ─── API Config ────────────────────────────────────────────────────────────
     private static final String OLLAMA_MODEL = System.getenv("OLLAMA_MODEL") != null
@@ -170,11 +170,11 @@ OUTPUT JSON ONLY:
     //  CONSTRUCTORS / RESET
     // ══════════════════════════════════════════════════════════════════════════
 
-    public yebot_mcts(UnitTypeTable a_utt) {
+    public yebot(UnitTypeTable a_utt) {
         this(a_utt, new AStarPathFinding());
     }
 
-    public yebot_mcts(UnitTypeTable a_utt, PathFinding a_pf) {
+    public yebot(UnitTypeTable a_utt, PathFinding a_pf) {
         super(a_pf);
         reset(a_utt);
     }
@@ -198,7 +198,7 @@ OUTPUT JSON ONLY:
 
     @Override
     public AI clone() {
-        return new yebot_mcts(utt, pf);
+        return new yebot(utt, pf);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -215,16 +215,19 @@ OUTPUT JSON ONLY:
             cachedAction = runMCTS(player, gs);
         }
 
-        // If we have a cached action, apply it; otherwise return empty
+        // If we have a cached action, apply it; otherwise fall through to translateActions
         if (cachedAction != null) {
             PlayerAction result = cachedAction;
-            // Only use once — units may have changed
             cachedAction = null;
-            // Filter to only valid units still alive and idle
-            return filterValidAction(result, player, gs);
+            PlayerAction filtered = filterValidAction(result, player, gs);
+            // fillWithNones ensures idle units don't stall the game engine
+            filtered.fillWithNones(gs, player, 1);
+            return filtered;
         }
 
-        return translateActions(player, gs);
+        PlayerAction fallback = translateActions(player, gs);
+        fallback.fillWithNones(gs, player, 1);
+        return fallback;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
