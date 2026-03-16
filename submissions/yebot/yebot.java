@@ -317,7 +317,7 @@ OUTPUT JSON ONLY:
                     childState.issueSafe(action);
                     // Advance a few ticks so the action takes effect
                     for (int t = 0; t < 3; t++) {
-                        if (childState.cycle() != 0) break;
+                        if (childState.cycle()) break;
                     }
                     MCTSNode child = new MCTSNode(node, action, childState, node.player);
                     node.children.add(child);
@@ -348,8 +348,8 @@ OUTPUT JSON ONLY:
     private GameState simulate(GameState state, int player) {
         try {
             for (int t = 0; t < SIMULATION_DEPTH; t++) {
-                int result = state.cycle();
-                if (result != 0) break; // game over
+                boolean done = state.cycle();
+                if (done) break; // game over
             }
         } catch (Exception e) {
             // Partial simulation is fine
@@ -546,11 +546,10 @@ OUTPUT JSON ONLY:
                     if (m.find()) {
                         int tx = Integer.parseInt(m.group(1));
                         int ty = Integer.parseInt(m.group(2));
-                        // Find direction using A* (one step)
-                        int dir = pf.findPathToAdjacentPosition(unit, tx + ty * pgs.getWidth(),
-                                gs, null);
-                        if (dir >= 0 && dir < 4) {
-                            return new UnitAction(UnitAction.TYPE_MOVE, dir);
+                        UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
+                                tx + ty * pgs.getWidth(), gs, null);
+                        if (moveAction != null) {
+                            return new UnitAction(UnitAction.TYPE_MOVE, moveAction.getDirection());
                         }
                     }
                     break;
@@ -575,20 +574,33 @@ OUTPUT JSON ONLY:
                                 && base.getPlayer() == player) {
 
                             if (unit.getResources() > 0) {
-                                // Carry back to base
-                                int dir = pf.findPathToAdjacentPosition(unit,
+                                // Carry back to base — just move toward it; return direction comes from adjacency
+                                UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
                                         baseX + baseY * pgs.getWidth(), gs, null);
-                                if (dir >= 0 && dir < 4) {
-                                    return new UnitAction(UnitAction.TYPE_RETURN, dir,
-                                            base.getPlayer(), base.getX() + base.getY() * pgs.getWidth());
+                                if (moveAction != null) {
+                                    int dir = moveAction.getDirection();
+                                    // If adjacent, issue RETURN; otherwise MOVE
+                                    int dx = Math.abs(unit.getX() - baseX);
+                                    int dy = Math.abs(unit.getY() - baseY);
+                                    if (dx + dy == 1) {
+                                        return new UnitAction(UnitAction.TYPE_RETURN, dir);
+                                    } else {
+                                        return new UnitAction(UnitAction.TYPE_MOVE, dir);
+                                    }
                                 }
                             } else {
                                 // Go harvest
-                                int dir = pf.findPathToAdjacentPosition(unit,
+                                UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
                                         resX + resY * pgs.getWidth(), gs, null);
-                                if (dir >= 0 && dir < 4) {
-                                    return new UnitAction(UnitAction.TYPE_HARVEST, dir,
-                                            resource.getPlayer(), resX + resY * pgs.getWidth());
+                                if (moveAction != null) {
+                                    int dir = moveAction.getDirection();
+                                    int dx = Math.abs(unit.getX() - resX);
+                                    int dy = Math.abs(unit.getY() - resY);
+                                    if (dx + dy == 1) {
+                                        return new UnitAction(UnitAction.TYPE_HARVEST, dir);
+                                    } else {
+                                        return new UnitAction(UnitAction.TYPE_MOVE, dir);
+                                    }
                                 }
                             }
                         }
@@ -606,12 +618,18 @@ OUTPUT JSON ONLY:
                         String bName = m.group(3).toLowerCase();
                         UnitType bt  = bName.equals("barracks") ? barracksType : baseType;
 
-                        // Check we can afford it
                         if (gs.getPlayer(player).getResources() >= bt.cost) {
-                            int dir = pf.findPathToAdjacentPosition(unit,
+                            UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
                                     bx + by * pgs.getWidth(), gs, null);
-                            if (dir >= 0 && dir < 4) {
-                                return new UnitAction(UnitAction.TYPE_PRODUCE, dir, bt);
+                            if (moveAction != null) {
+                                int dir = moveAction.getDirection();
+                                int dx = Math.abs(unit.getX() - bx);
+                                int dy = Math.abs(unit.getY() - by);
+                                if (dx + dy == 1) {
+                                    return new UnitAction(UnitAction.TYPE_PRODUCE, dir, bt);
+                                } else {
+                                    return new UnitAction(UnitAction.TYPE_MOVE, dir);
+                                }
                             }
                         }
                     }
@@ -663,7 +681,6 @@ OUTPUT JSON ONLY:
                         if (target != null && target.getPlayer() != player
                                 && target.getPlayer() != -1) {
 
-                            // Check if in range
                             int dx = Math.abs(unit.getX() - tx);
                             int dy = Math.abs(unit.getY() - ty);
                             int dist = dx + dy;
@@ -672,11 +689,11 @@ OUTPUT JSON ONLY:
                                 return new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
                                         tx + ty * pgs.getWidth());
                             } else {
-                                // Move toward target first
-                                int dir = pf.findPathToAdjacentPosition(unit,
+                                UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
                                         tx + ty * pgs.getWidth(), gs, null);
-                                if (dir >= 0 && dir < 4) {
-                                    return new UnitAction(UnitAction.TYPE_MOVE, dir);
+                                if (moveAction != null) {
+                                    return new UnitAction(UnitAction.TYPE_MOVE,
+                                            moveAction.getDirection());
                                 }
                             }
                         }
@@ -698,9 +715,9 @@ OUTPUT JSON ONLY:
         PhysicalGameState pgs = gs.getPhysicalGameState();
         PlayerAction valid = new PlayerAction();
 
-        for (Map.Entry<Unit, UnitAction> entry : action.getActions()) {
-            Unit storedUnit = entry.getKey();
-            UnitAction ua   = entry.getValue();
+        for (rts.Pair<Unit, UnitAction> pair : action.getActions()) {
+            Unit storedUnit = pair.m_a;
+            UnitAction ua   = pair.m_b;
 
             // Find the unit by ID in the current state
             Unit liveUnit = null;
