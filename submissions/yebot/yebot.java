@@ -58,7 +58,6 @@ public class yebot extends AbstractionLayerAI {
         super(a_pf);
         reset(a_utt);
 
-        // Initialize the shared MCTS engine exactly like AlliBot does
         LLMInformedMCTS tmp;
         try {
             tmp = new LLMInformedMCTS(a_utt);
