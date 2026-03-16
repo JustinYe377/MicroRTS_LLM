@@ -3,7 +3,7 @@
   "display_name": "yebot",
   "agent_class": "yebot",
   "agent_file": "yebot.java",
-  "model_provider": "deepseek",
-  "model_name": "deepseek-chat",
-  "description": "PureLLM(Cloud DeepkSeek) with modified Prompt(Economy,Build Military,Attack)"
+  "model_provider": "ollama",
+  "model_name": "llama4:latest",
+  "description": "LLM-Guided MCTS Agent for MicroRTS"
 }
