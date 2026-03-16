@@ -1,11 +1,18 @@
 /*
- * LLM-Guided MCTS Agent for MicroRTS
+ * LLM-Guided MCTS Agent for MicroRTS — v3 (Speed + Defense)
  *
- * Architecture:
- *   - MCTS tree search for lookahead (written from scratch)
- *   - LLM used as evaluation function for leaf nodes
- *   - LLM also used for move generation (policy network analog)
- *   - No built-in AIs used anywhere
+ * Speed improvements over v2:
+ *   1. Async MCTS — game thread never blocks on LLM
+ *   2. Heuristic policy replaces policy LLM — zero LLM calls during expansion
+ *   3. LLM used ONLY for final eval pass (1 call per MCTS search)
+ *   4. Prompt cache — identical states reuse cached LLM responses
+ *   5. Compact eval prompt — ~100 chars instead of ~800
+ *   6. Tuned constants — fewer iterations, shallower rollouts
+ *
+ * Worker Rush Defense:
+ *   - Detects incoming worker rushes (many enemy workers approaching base early)
+ *   - Activates DEFEND mode: workers intercept attackers, base trains emergency workers
+ *   - Returns to normal MCTS play once threat is neutralized
  *
  * @author Ye
  * Team: yebot
@@ -25,6 +32,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.regex.*;
 
 public class yebot extends AbstractionLayerAI {
@@ -34,113 +42,59 @@ public class yebot extends AbstractionLayerAI {
             ? System.getenv("OLLAMA_MODEL") : "llama4:latest";
     private static final String API_URL = System.getenv("OLLAMA_URL") != null
             ? System.getenv("OLLAMA_URL") : "http://localhost:11434/v1/chat/completions";
-    private static final int REQUEST_TIMEOUT = 30000;
+    private static final int REQUEST_TIMEOUT = 15000; // reduced from 30s
 
     // ─── MCTS Config ───────────────────────────────────────────────────────────
-    private static final int MCTS_ITERATIONS      = 10;   // tree expansions per turn
-    private static final int SIMULATION_DEPTH     = 15;   // game ticks per rollout
-    private static final double UCB_C             = 1.41; // exploration constant
-    private static final int LLM_EVAL_INTERVAL    = 3;    // eval every Nth MCTS node
-    private static final int ACTION_INTERVAL      = 10;   // ticks between MCTS runs
+    private static final int MCTS_ITERATIONS   = 8;    // was 10 — heuristic policy makes each iteration free
+    private static final int SIMULATION_DEPTH  = 8;    // was 15 — faster rollouts
+    private static final double UCB_C          = 1.41;
+    private static final int ACTION_INTERVAL   = 20;   // was 10 — search less often, async so it doesn't matter
+
+    // ─── Worker Rush Defense Config ────────────────────────────────────────────
+    private static final int RUSH_DETECT_RADIUS   = 6;  // enemy workers within this distance = rush
+    private static final int RUSH_WORKER_THRESHOLD = 2;  // at least this many rushing workers = rush
+    private static final int RUSH_EARLY_TICKS      = 150; // only detect rush in early game
 
     // ─── Unit Types ────────────────────────────────────────────────────────────
     private UnitTypeTable utt;
     private UnitType workerType, lightType, heavyType, rangedType, baseType, barracksType;
 
-    // ─── State ─────────────────────────────────────────────────────────────────
-    private int lastActionTick = -100;
-    private PlayerAction cachedAction = null;
+    // ─── Async MCTS State ──────────────────────────────────────────────────────
+    private final ExecutorService llmExecutor = Executors.newSingleThreadExecutor();
+    private volatile PlayerAction pendingAction = null;
+    private volatile boolean llmRunning = false;
+    private int lastSubmitTick = -100;
 
-    // ─── Prompts ───────────────────────────────────────────────────────────────
+    // ─── LLM Response Cache ────────────────────────────────────────────────────
+    private final Map<String, String> llmCache = Collections.synchronizedMap(
+        new LinkedHashMap<String, String>() {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, String> e) {
+                return size() > 30;
+            }
+        }
+    );
 
-    /**
-     * Used by the POLICY LLM: given a game state, generate candidate moves.
-     * Runs once per MCTS iteration to produce the action to try at the root.
-     */
-    private static final String POLICY_SYSTEM_PROMPT = """
-You are a MicroRTS move generator. Given a game state, output a small set of
-candidate actions for the ALLY units that are worth exploring.
+    // ─── Unit ID map for filtering ─────────────────────────────────────────────
+    private volatile Map<Long, UnitAction> lastCandidateUnitMap = new HashMap<>();
 
-=== UNIT STATS ===
-| Unit     | HP | Cost | Damage | Range | Speed | From     |
-|----------|----|----- |--------|-------|-------|----------|
-| Worker   | 1  | 1    | 1      | 1     | 1     | Base     |
-| Light    | 4  | 2    | 2      | 1     | 2     | Barracks |
-| Heavy    | 8  | 3    | 4      | 1     | 1     | Barracks |
-| Ranged   | 3  | 2    | 1      | 3     | 1     | Barracks |
-| Base     | 10 | 10   | -      | -     | -     | -        |
-| Barracks | 5  | 5    | -      | -     | -     | -        |
-
-=== ACTIONS ===
-- move((x, y))
-- harvest((res_x, res_y), (base_x, base_y))   [WORKER only]
-- build((x, y), barracks)                      [WORKER only]
-- train(worker)                                 [BASE only]
-- train(light|heavy|ranged)                    [BARRACKS only]
-- attack((enemy_x, enemy_y))
-
-=== RULES ===
-1. ONE action per unit (each position once)
-2. Only command units with Status=idling
-3. Buildings CANNOT move or attack
-4. harvest() second arg MUST be YOUR base
-
-=== OUTPUT (JSON ONLY) ===
-{
-  "thinking": "one sentence",
-  "moves": [
-    {
-      "raw_move": "(x, y): unit_type action((args))",
-      "unit_position": [x, y],
-      "unit_type": "worker|light|heavy|ranged|base|barracks",
-      "action_type": "move|harvest|build|train|attack"
-    }
-  ]
-}
-""";
-
-    /**
-     * Used by the EVALUATION LLM: given a simulated state, score it 0-100.
-     * Runs at MCTS leaf nodes to backpropagate value estimates.
-     */
+    // ─── Eval-only prompt (compact) ────────────────────────────────────────────
     private static final String EVAL_SYSTEM_PROMPT = """
-You are a MicroRTS position evaluator. Score the ALLY player's position from 0 to 100.
-
-Scoring guide:
-- 100: Ally has clearly won (enemy base destroyed or no enemy units)
-- 75+: Strong advantage (more units, more resources, enemy base damaged)
-- 50:  Even position
-- 25-: Disadvantage (fewer units, lost base HP, no barracks)
-- 0:   Lost (ally base destroyed or no ally units)
-
-Consider:
-1. Unit count and total HP comparison (ally vs enemy)
-2. Resource advantage
-3. Base HP comparison
-4. Map control (units closer to enemy base)
-5. Production capacity (barracks present?)
-
-OUTPUT JSON ONLY:
-{
-  "score": 65,
-  "reason": "one sentence explaining the score"
-}
+You are a MicroRTS position evaluator. Score the ALLY player's position 0-100.
+100=ally wins, 0=ally loses, 50=even.
+Weigh: unit count, total HP, resources, base health, production buildings.
+OUTPUT JSON ONLY: {"score": 65, "reason": "one sentence"}
 """;
 
     // ══════════════════════════════════════════════════════════════════════════
     //  MCTS NODE
     // ══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * A node in the MCTS tree.
-     * Each node represents a game state reached by taking `actionTaken` from parent.
-     */
     private class MCTSNode {
         MCTSNode parent;
-        PlayerAction actionTaken;   // action that led to this state from parent
-        GameState state;            // game state at this node
+        PlayerAction actionTaken;
+        GameState state;
         int player;
-
         List<MCTSNode> children = new ArrayList<>();
         double totalValue = 0.0;
         int visitCount = 0;
@@ -153,7 +107,6 @@ OUTPUT JSON ONLY:
             this.player = player;
         }
 
-        // UCB1 score for selection
         double ucb1() {
             if (visitCount == 0) return Double.MAX_VALUE;
             double exploit = totalValue / visitCount;
@@ -182,8 +135,11 @@ OUTPUT JSON ONLY:
     @Override
     public void reset() {
         super.reset();
-        lastActionTick = -100;
-        cachedAction = null;
+        pendingAction = null;
+        llmRunning = false;
+        lastSubmitTick = -100;
+        llmCache.clear();
+        lastCandidateUnitMap = new HashMap<>();
     }
 
     public void reset(UnitTypeTable a_utt) {
@@ -202,58 +158,403 @@ OUTPUT JSON ONLY:
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  MAIN ENTRY POINT
+    //  MAIN ENTRY POINT — never blocks
     // ══════════════════════════════════════════════════════════════════════════
 
     @Override
     public PlayerAction getAction(int player, GameState gs) throws Exception {
         int tick = gs.getTime();
+        PhysicalGameState pgs = gs.getPhysicalGameState();
 
-        if (tick - lastActionTick >= ACTION_INTERVAL) {
-            lastActionTick = tick;
-            System.out.println("[MCTS] Tick " + tick + " — running search...");
-            cachedAction = runMCTS(player, gs);
+        // ── PRIORITY 1: Worker Rush Defense ───────────────────────────────────
+        // Runs every tick, purely heuristic, instant — no LLM involved
+        if (isWorkerRush(player, gs, pgs)) {
+            System.out.println("[yebot] RUSH DETECTED at tick " + tick + " — activating defense");
+            PlayerAction defense = buildWorkerRushDefense(player, gs, pgs);
+            defense.fillWithNones(gs, player, 1);
+            return defense;
         }
 
-        // If we have a cached action, apply it; otherwise fall through to translateActions
-        if (cachedAction != null) {
-            PlayerAction result = cachedAction;
-            cachedAction = null;
-            PlayerAction filtered = filterValidAction(result, player, gs);
-            // fillWithNones ensures idle units don't stall the game engine
-            filtered.fillWithNones(gs, player, 1);
-            return filtered;
+        // ── PRIORITY 2: Fire async MCTS if not already running ────────────────
+        if (!llmRunning && tick - lastSubmitTick >= ACTION_INTERVAL) {
+            lastSubmitTick = tick;
+            llmRunning = true;
+            final GameState gsCopy = gs.clone();
+            final int playerCopy = player;
+            llmExecutor.submit(() -> {
+                try {
+                    PlayerAction result = runMCTS(playerCopy, gsCopy);
+                    // Store unit map for filtering in game thread
+                    pendingAction = result;
+                } catch (Exception e) {
+                    System.err.println("[MCTS] Async search failed: " + e.getMessage());
+                } finally {
+                    llmRunning = false;
+                }
+            });
         }
 
-        PlayerAction fallback = translateActions(player, gs);
+        // ── PRIORITY 3: Apply last MCTS result if available ───────────────────
+        if (pendingAction != null) {
+            PlayerAction result = filterValidAction(player, gs);
+            result.fillWithNones(gs, player, 1);
+            return result;
+        }
+
+        // ── PRIORITY 4: Heuristic fallback on first ticks before MCTS finishes ─
+        PlayerAction fallback = buildHeuristicAction(player, gs, pgs);
         fallback.fillWithNones(gs, player, 1);
         return fallback;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  WORKER RUSH DETECTION + DEFENSE
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Detect a worker rush: enemy has RUSH_WORKER_THRESHOLD+ workers
+     * within RUSH_DETECT_RADIUS of our base in the early game.
+     */
+    private boolean isWorkerRush(int player, GameState gs, PhysicalGameState pgs) {
+        if (gs.getTime() > RUSH_EARLY_TICKS) return false;
+
+        // Find our base
+        Unit myBase = null;
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() == player && u.getType() == baseType) {
+                myBase = u;
+                break;
+            }
+        }
+        if (myBase == null) return false;
+
+        // Count enemy workers approaching our base
+        int rushingWorkers = 0;
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() == player || u.getPlayer() == -1) continue;
+            if (u.getType() != workerType) continue;
+            int dist = Math.abs(u.getX() - myBase.getX()) + Math.abs(u.getY() - myBase.getY());
+            if (dist <= RUSH_DETECT_RADIUS) rushingWorkers++;
+        }
+
+        return rushingWorkers >= RUSH_WORKER_THRESHOLD;
+    }
+
+    /**
+     * Worker Rush Defense strategy:
+     *
+     * The key insight about worker rushes:
+     *   - Enemy workers have 1 HP and 1 damage — same as yours
+     *   - It's a pure numbers game — more workers attacking = win
+     *   - Defense: intercept with ALL idle workers, train more immediately
+     *   - Workers should attack the WEAKEST enemy first (kill confirmation)
+     *   - Base should spam workers if affordable (1 resource cost)
+     *   - Do NOT waste time harvesting during a rush
+     */
+    private PlayerAction buildWorkerRushDefense(int player, GameState gs, PhysicalGameState pgs) {
+        PlayerAction pa = new PlayerAction();
+        Set<Long> assigned = new HashSet<>();
+
+        Unit myBase = null;
+        List<Unit> myWorkers = new ArrayList<>();
+        List<Unit> enemyWorkers = new ArrayList<>();
+        List<Unit> enemyCombat = new ArrayList<>(); // non-worker enemies
+
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() == player) {
+                if (u.getType() == baseType) myBase = u;
+                if (u.getType() == workerType) myWorkers.add(u);
+            } else if (u.getPlayer() != -1) {
+                if (u.getType() == workerType) enemyWorkers.add(u);
+                else if (u.getType().canAttack) enemyCombat.add(u);
+            }
+        }
+
+        // Sort enemy workers by HP ascending — attack weakest first for kill confirmation
+        enemyWorkers.sort(Comparator.comparingInt(Unit::getHitPoints));
+
+        // All enemies to fight (workers first, then other combat units)
+        List<Unit> allEnemyThreats = new ArrayList<>(enemyWorkers);
+        allEnemyThreats.addAll(enemyCombat);
+
+        // ── Step 1: All idle workers intercept enemy workers ──────────────────
+        for (Unit worker : myWorkers) {
+            if (gs.getActionAssignment(worker) != null) continue; // busy
+            if (allEnemyThreats.isEmpty()) break;
+
+            // Find closest enemy threat
+            Unit target = null;
+            int bestDist = Integer.MAX_VALUE;
+            for (Unit enemy : allEnemyThreats) {
+                int dist = Math.abs(worker.getX() - enemy.getX())
+                         + Math.abs(worker.getY() - enemy.getY());
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    target = enemy;
+                }
+            }
+            if (target == null) continue;
+
+            // If adjacent/in range — attack immediately
+            if (bestDist <= worker.getType().attackRange) {
+                UnitAction attack = new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
+                        target.getX() + target.getY() * pgs.getWidth());
+                if (gs.isUnitActionAllowed(worker, attack)) {
+                    pa.addUnitAction(worker, attack);
+                    assigned.add(worker.getID());
+                    // Remove target if we expect to kill it (1 damage vs 1 HP)
+                    if (target.getHitPoints() <= worker.getType().maxDamage) {
+                        allEnemyThreats.remove(target);
+                    }
+                    continue;
+                }
+            }
+
+            // Otherwise — move toward target
+            UnitAction move = pf.findPathToAdjacentPosition(worker,
+                    target.getX() + target.getY() * pgs.getWidth(), gs, null);
+            if (move != null && gs.isUnitActionAllowed(worker, move)) {
+                pa.addUnitAction(worker, move);
+                assigned.add(worker.getID());
+            }
+        }
+
+        // ── Step 2: Base trains emergency worker if affordable ─────────────────
+        if (myBase != null && gs.getActionAssignment(myBase) == null) {
+            if (gs.getPlayer(player).getResources() >= workerType.cost) {
+                // Spawn toward the rush direction for faster intercept
+                int bestDir = findBestSpawnDir(myBase, pgs, allEnemyThreats);
+                UnitAction train = new UnitAction(UnitAction.TYPE_PRODUCE, bestDir, workerType);
+                if (gs.isUnitActionAllowed(myBase, train)) {
+                    pa.addUnitAction(myBase, train);
+                }
+            }
+        }
+
+        return pa;
+    }
+
+    /**
+     * Find the best direction to spawn a unit from a building,
+     * preferring directions that face toward the enemy threat.
+     */
+    private int findBestSpawnDir(Unit building, PhysicalGameState pgs, List<Unit> threats) {
+        int bestDir = UnitAction.DIRECTION_DOWN;
+        int bestScore = Integer.MIN_VALUE;
+
+        for (int dir = 0; dir < 4; dir++) {
+            int nx = building.getX() + UnitAction.DIRECTION_OFFSET_X[dir];
+            int ny = building.getY() + UnitAction.DIRECTION_OFFSET_Y[dir];
+            if (nx < 0 || ny < 0 || nx >= pgs.getWidth() || ny >= pgs.getHeight()) continue;
+            if (pgs.getUnitAt(nx, ny) != null) continue;
+            if (pgs.getTerrain(nx, ny) != PhysicalGameState.TERRAIN_NONE) continue;
+
+            // Score: negative distance to closest threat (closer = better)
+            int score = 0;
+            if (!threats.isEmpty()) {
+                int minDist = Integer.MAX_VALUE;
+                for (Unit t : threats) {
+                    int dist = Math.abs(nx - t.getX()) + Math.abs(ny - t.getY());
+                    minDist = Math.min(minDist, dist);
+                }
+                score = -minDist;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                bestDir = dir;
+            }
+        }
+        return bestDir;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  HEURISTIC POLICY (replaces policy LLM — instant, no HTTP)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Generate a sensible PlayerAction without calling the LLM.
+     * Used both as MCTS expansion policy and as game-loop fallback.
+     *
+     * Priority order per unit:
+     *   Military: attack nearest enemy > move toward nearest enemy
+     *   Worker:   return resources > harvest > move to resource
+     *   Base:     train worker if below threshold
+     *   Barracks: train ranged (cheap, flexible) if affordable
+     */
+    private PlayerAction buildHeuristicAction(int player, GameState gs, PhysicalGameState pgs) {
+        PlayerAction pa = new PlayerAction();
+
+        List<Unit> myUnits = new ArrayList<>();
+        List<Unit> enemies = new ArrayList<>();
+        List<Unit> resources = new ArrayList<>();
+        Unit myBase = null;
+        int myWorkerCount = 0;
+
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() == player) {
+                myUnits.add(u);
+                if (u.getType() == workerType) myWorkerCount++;
+                if (u.getType() == baseType) myBase = u;
+            } else if (u.getPlayer() == -1) {
+                resources.add(u);
+            } else {
+                enemies.add(u);
+            }
+        }
+
+        final int finalWorkerCount = myWorkerCount;
+        final Unit finalBase = myBase;
+
+        for (Unit unit : myUnits) {
+            if (gs.getActionAssignment(unit) != null) continue; // already has action
+
+            UnitAction ua = null;
+
+            // ── Military units ──────────────────────────────────────────────
+            if (unit.getType() == lightType || unit.getType() == heavyType
+                    || unit.getType() == rangedType) {
+                ua = militaryAction(unit, enemies, gs, pgs);
+            }
+
+            // ── Workers ─────────────────────────────────────────────────────
+            else if (unit.getType() == workerType) {
+                ua = workerAction(unit, enemies, resources, finalBase, gs, pgs);
+            }
+
+            // ── Base ────────────────────────────────────────────────────────
+            else if (unit.getType() == baseType) {
+                // Train worker if we have fewer than 2
+                if (finalWorkerCount < 2
+                        && gs.getPlayer(player).getResources() >= workerType.cost) {
+                    ua = trainUnit(unit, workerType, enemies, pgs);
+                }
+            }
+
+            // ── Barracks ────────────────────────────────────────────────────
+            else if (unit.getType() == barracksType) {
+                // Train ranged as default — cheap and good range
+                if (gs.getPlayer(player).getResources() >= rangedType.cost) {
+                    ua = trainUnit(unit, rangedType, enemies, pgs);
+                } else if (gs.getPlayer(player).getResources() >= lightType.cost) {
+                    ua = trainUnit(unit, lightType, enemies, pgs);
+                }
+            }
+
+            if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
+                pa.addUnitAction(unit, ua);
+            }
+        }
+
+        return pa;
+    }
+
+    private UnitAction militaryAction(Unit unit, List<Unit> enemies,
+                                       GameState gs, PhysicalGameState pgs) {
+        if (enemies.isEmpty()) return null;
+
+        // Find closest enemy
+        Unit target = null;
+        int bestDist = Integer.MAX_VALUE;
+        for (Unit e : enemies) {
+            int dist = Math.abs(unit.getX() - e.getX()) + Math.abs(unit.getY() - e.getY());
+            if (dist < bestDist) { bestDist = dist; target = e; }
+        }
+        if (target == null) return null;
+
+        // Attack if in range
+        if (bestDist <= unit.getType().attackRange) {
+            return new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
+                    target.getX() + target.getY() * pgs.getWidth());
+        }
+
+        // Move toward target
+        UnitAction move = pf.findPathToAdjacentPosition(unit,
+                target.getX() + target.getY() * pgs.getWidth(), gs, null);
+        return move;
+    }
+
+    private UnitAction workerAction(Unit worker, List<Unit> enemies, List<Unit> resources,
+                                     Unit base, GameState gs, PhysicalGameState pgs) {
+        // Return resources if carrying
+        if (worker.getResources() > 0 && base != null) {
+            int dist = Math.abs(worker.getX() - base.getX())
+                     + Math.abs(worker.getY() - base.getY());
+            if (dist == 1) {
+                int dir = dirTo(worker.getX(), worker.getY(), base.getX(), base.getY());
+                return new UnitAction(UnitAction.TYPE_RETURN, dir);
+            }
+            UnitAction move = pf.findPathToAdjacentPosition(worker,
+                    base.getX() + base.getY() * pgs.getWidth(), gs, null);
+            return move;
+        }
+
+        // Harvest nearest resource
+        if (!resources.isEmpty()) {
+            Unit res = nearestUnit(worker, resources);
+            if (res != null) {
+                int dist = Math.abs(worker.getX() - res.getX())
+                         + Math.abs(worker.getY() - res.getY());
+                if (dist == 1) {
+                    int dir = dirTo(worker.getX(), worker.getY(), res.getX(), res.getY());
+                    return new UnitAction(UnitAction.TYPE_HARVEST, dir);
+                }
+                UnitAction move = pf.findPathToAdjacentPosition(worker,
+                        res.getX() + res.getY() * pgs.getWidth(), gs, null);
+                return move;
+            }
+        }
+
+        // Attack if no resources and enemies nearby
+        if (!enemies.isEmpty()) {
+            return militaryAction(worker, enemies, gs, pgs);
+        }
+
+        return null;
+    }
+
+    private UnitAction trainUnit(Unit building, UnitType trainType,
+                                  List<Unit> enemies, PhysicalGameState pgs) {
+        // Pick spawn direction facing toward nearest enemy
+        int bestDir = UnitAction.DIRECTION_DOWN;
+        int bestScore = Integer.MIN_VALUE;
+
+        for (int dir = 0; dir < 4; dir++) {
+            int nx = building.getX() + UnitAction.DIRECTION_OFFSET_X[dir];
+            int ny = building.getY() + UnitAction.DIRECTION_OFFSET_Y[dir];
+            if (nx < 0 || ny < 0 || nx >= pgs.getWidth() || ny >= pgs.getHeight()) continue;
+            if (pgs.getUnitAt(nx, ny) != null) continue;
+            if (pgs.getTerrain(nx, ny) != PhysicalGameState.TERRAIN_NONE) continue;
+
+            int score = 0;
+            if (!enemies.isEmpty()) {
+                Unit nearest = nearestUnit(building.getX(), building.getY(), enemies);
+                if (nearest != null) {
+                    score = -(Math.abs(nx - nearest.getX()) + Math.abs(ny - nearest.getY()));
+                }
+            }
+            if (score > bestScore) { bestScore = score; bestDir = dir; }
+        }
+
+        return new UnitAction(UnitAction.TYPE_PRODUCE, bestDir, trainType);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  MCTS CORE
     // ══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Run MCTS from the current game state.
-     * Returns the best PlayerAction found.
-     */
     private PlayerAction runMCTS(int player, GameState gs) throws Exception {
         MCTSNode root = new MCTSNode(null, null, gs.clone(), player);
 
         for (int i = 0; i < MCTS_ITERATIONS; i++) {
-            // 1. SELECTION — walk tree using UCB1
             MCTSNode selected = select(root);
 
-            // 2. EXPANSION — use LLM policy to generate children
-            if (selected.visitCount > 0 || selected == root) {
-                expand(selected);
+            // Expand using heuristic policy — instant, no LLM
+            if (!selected.expanded) {
+                expandWithHeuristic(selected);
             }
 
-            // 3. Choose a child to simulate from (or simulate from selected)
             MCTSNode toSimulate = selected;
             if (!selected.children.isEmpty()) {
-                // Pick unvisited child first, else random
                 toSimulate = selected.children.stream()
                         .filter(c -> c.visitCount == 0)
                         .findFirst()
@@ -261,17 +562,19 @@ OUTPUT JSON ONLY:
                                 new Random().nextInt(selected.children.size())));
             }
 
-            // 4. SIMULATION — fast-forward game state
             GameState simState = simulate(toSimulate.state.clone(), player);
 
-            // 5. EVALUATION — LLM scores the resulting position
-            double value = evaluateState(player, simState, i);
+            // LLM eval only on LAST iteration — one call per full MCTS search
+            double value;
+            if (i == MCTS_ITERATIONS - 1) {
+                value = evaluateWithLLM(player, simState);
+            } else {
+                value = evaluateWithHeuristic(player, simState);
+            }
 
-            // 6. BACKPROPAGATION
             backpropagate(toSimulate, value);
         }
 
-        // Pick best child of root by average value
         return bestAction(root);
     }
 
@@ -279,80 +582,120 @@ OUTPUT JSON ONLY:
 
     private MCTSNode select(MCTSNode node) {
         while (!node.children.isEmpty()) {
-            // If any child unvisited, select it immediately
             Optional<MCTSNode> unvisited = node.children.stream()
-                    .filter(c -> c.visitCount == 0)
-                    .findFirst();
+                    .filter(c -> c.visitCount == 0).findFirst();
             if (unvisited.isPresent()) return unvisited.get();
 
-            // Otherwise use UCB1
             node = node.children.stream()
                     .max(Comparator.comparingDouble(MCTSNode::ucb1))
                     .orElse(node);
-
-            // Stop if leaf
             if (!node.expanded) break;
         }
         return node;
     }
 
-    // ── Expansion ──────────────────────────────────────────────────────────────
+    // ── Expansion (heuristic, no LLM) ─────────────────────────────────────────
 
-    /**
-     * Use the POLICY LLM to generate candidate moves, create child nodes.
-     */
-    private void expand(MCTSNode node) {
-        if (node.expanded) return;
+    private void expandWithHeuristic(MCTSNode node) {
         node.expanded = true;
-
         try {
-            String statePrompt = buildGameStatePrompt(node.player, node.state);
-            String response = callLLM(statePrompt, POLICY_SYSTEM_PROMPT);
-            List<PlayerAction> candidates = parseCandidateActions(response, node.player, node.state);
+            PhysicalGameState pgs = node.state.getPhysicalGameState();
+
+            // Generate 3 candidate actions:
+            // 1. Full heuristic action (all units)
+            // 2. Attack-focused (military units only)
+            // 3. Economy-focused (workers + train)
+            List<PlayerAction> candidates = new ArrayList<>();
+            candidates.add(buildHeuristicAction(node.player, node.state, pgs));
+            candidates.add(buildAttackFocusedAction(node.player, node.state, pgs));
+            candidates.add(buildEconomyFocusedAction(node.player, node.state, pgs));
 
             for (PlayerAction action : candidates) {
+                if (action == null || action.isEmpty()) continue;
                 try {
                     GameState childState = node.state.clone();
-                    // Issue the action in simulation
                     childState.issueSafe(action);
-                    // Advance a few ticks so the action takes effect
                     for (int t = 0; t < 3; t++) {
                         if (childState.cycle()) break;
                     }
-                    MCTSNode child = new MCTSNode(node, action, childState, node.player);
-                    node.children.add(child);
+                    node.children.add(new MCTSNode(node, action, childState, node.player));
                 } catch (Exception e) {
-                    // Skip invalid action
+                    // skip
                 }
             }
 
-            // Always add a "do nothing" child as fallback
             if (node.children.isEmpty()) {
-                MCTSNode passChild = new MCTSNode(node, new PlayerAction(), node.state.clone(), node.player);
-                node.children.add(passChild);
+                node.children.add(new MCTSNode(node, new PlayerAction(),
+                        node.state.clone(), node.player));
             }
-
         } catch (Exception e) {
-            System.err.println("[MCTS] Expansion failed: " + e.getMessage());
-            MCTSNode passChild = new MCTSNode(node, new PlayerAction(), node.state.clone(), node.player);
-            node.children.add(passChild);
+            System.err.println("[MCTS] Expansion error: " + e.getMessage());
+            node.children.add(new MCTSNode(node, new PlayerAction(),
+                    node.state.clone(), node.player));
         }
+    }
+
+    /** Attack-focused candidate: all military units advance, buildings train */
+    private PlayerAction buildAttackFocusedAction(int player, GameState gs, PhysicalGameState pgs) {
+        PlayerAction pa = new PlayerAction();
+        List<Unit> enemies = new ArrayList<>();
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() != player && u.getPlayer() != -1) enemies.add(u);
+        }
+        for (Unit unit : pgs.getUnits()) {
+            if (unit.getPlayer() != player) continue;
+            if (gs.getActionAssignment(unit) != null) continue;
+            UnitAction ua = null;
+            if (unit.getType().canAttack && unit.getType() != baseType
+                    && unit.getType() != barracksType) {
+                ua = militaryAction(unit, enemies, gs, pgs);
+            } else if (unit.getType() == barracksType
+                    && gs.getPlayer(player).getResources() >= heavyType.cost) {
+                ua = trainUnit(unit, heavyType, enemies, pgs);
+            } else if (unit.getType() == baseType
+                    && gs.getPlayer(player).getResources() >= workerType.cost) {
+                ua = trainUnit(unit, workerType, enemies, pgs);
+            }
+            if (ua != null && gs.isUnitActionAllowed(unit, ua)) pa.addUnitAction(unit, ua);
+        }
+        return pa;
+    }
+
+    /** Economy-focused candidate: workers harvest, base trains workers */
+    private PlayerAction buildEconomyFocusedAction(int player, GameState gs, PhysicalGameState pgs) {
+        PlayerAction pa = new PlayerAction();
+        List<Unit> resources = new ArrayList<>();
+        List<Unit> enemies = new ArrayList<>();
+        Unit base = null;
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() == -1) resources.add(u);
+            else if (u.getPlayer() == player && u.getType() == baseType) base = u;
+            else if (u.getPlayer() != player) enemies.add(u);
+        }
+        for (Unit unit : pgs.getUnits()) {
+            if (unit.getPlayer() != player) continue;
+            if (gs.getActionAssignment(unit) != null) continue;
+            UnitAction ua = null;
+            if (unit.getType() == workerType) {
+                ua = workerAction(unit, enemies, resources, base, gs, pgs);
+            } else if (unit.getType() == baseType
+                    && gs.getPlayer(player).getResources() >= workerType.cost) {
+                ua = trainUnit(unit, workerType, enemies, pgs);
+            }
+            if (ua != null && gs.isUnitActionAllowed(unit, ua)) pa.addUnitAction(unit, ua);
+        }
+        return pa;
     }
 
     // ── Simulation ─────────────────────────────────────────────────────────────
 
-    /**
-     * Fast-forward the game state by SIMULATION_DEPTH ticks.
-     * No AI is used — units with no actions just idle (reflecting real play).
-     */
     private GameState simulate(GameState state, int player) {
         try {
             for (int t = 0; t < SIMULATION_DEPTH; t++) {
-                boolean done = state.cycle();
-                if (done) break; // game over
+                if (state.cycle()) break;
             }
         } catch (Exception e) {
-            // Partial simulation is fine
+            // partial simulation ok
         }
         return state;
     }
@@ -360,83 +703,97 @@ OUTPUT JSON ONLY:
     // ── Evaluation ─────────────────────────────────────────────────────────────
 
     /**
-     * Use the EVALUATION LLM to score a game state.
-     * Falls back to heuristic scoring every other call to save API time.
+     * LLM evaluation with compact prompt + cache.
+     * Only called once per full MCTS search (on last iteration).
      */
-    private double evaluateState(int player, GameState gs, int iteration) {
-        // Use LLM every LLM_EVAL_INTERVAL iterations, heuristic otherwise
-        if (iteration % LLM_EVAL_INTERVAL == 0) {
-            return evaluateWithLLM(player, gs);
-        } else {
-            return evaluateWithHeuristic(player, gs);
-        }
-    }
-
     private double evaluateWithLLM(int player, GameState gs) {
         try {
-            String statePrompt = buildGameStatePrompt(player, gs);
-            String response = callLLM(statePrompt, EVAL_SYSTEM_PROMPT);
+            String prompt = buildCompactEvalPrompt(player, gs);
+            String cacheKey = Integer.toHexString(prompt.hashCode());
+
+            String response;
+            if (llmCache.containsKey(cacheKey)) {
+                response = llmCache.get(cacheKey);
+                System.out.println("[MCTS] Eval cache hit");
+            } else {
+                response = callLLM(prompt, EVAL_SYSTEM_PROMPT);
+                llmCache.put(cacheKey, response);
+            }
 
             JsonObject json = parseJsonResponse(response);
             if (json != null && json.has("score")) {
                 double score = json.get("score").getAsDouble();
-                System.out.println("[MCTS] LLM eval: " + score +
-                        (json.has("reason") ? " — " + json.get("reason").getAsString() : ""));
-                return score / 100.0; // normalize to 0-1
+                return score / 100.0;
             }
         } catch (Exception e) {
-            System.err.println("[MCTS] LLM eval failed, falling back to heuristic");
+            System.err.println("[MCTS] LLM eval failed: " + e.getMessage());
         }
         return evaluateWithHeuristic(player, gs);
     }
 
     /**
-     * Fast heuristic evaluation — used when skipping LLM call.
-     * Scores based on unit counts, HP, resources, base health.
+     * Compact eval prompt — ~100 chars vs ~800 chars of full state.
+     * Enough for the LLM to score the position meaningfully.
+     */
+    private String buildCompactEvalPrompt(int player, GameState gs) {
+        PhysicalGameState pgs = gs.getPhysicalGameState();
+        int enemy = 1 - player;
+
+        int aUnits = 0, eUnits = 0, aHP = 0, eHP = 0;
+        boolean aBase = false, eBase = false, aBarracks = false;
+
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() == player) {
+                aUnits++; aHP += u.getHitPoints();
+                if (u.getType() == baseType) aBase = true;
+                if (u.getType() == barracksType) aBarracks = true;
+            } else if (u.getPlayer() != -1) {
+                eUnits++; eHP += u.getHitPoints();
+                if (u.getType() == baseType) eBase = true;
+            }
+        }
+
+        return String.format("t=%d A:[%du %dhp %dr base=%b brx=%b] E:[%du %dhp %dr base=%b]",
+                gs.getTime(),
+                aUnits, aHP, gs.getPlayer(player).getResources(), aBase, aBarracks,
+                eUnits, eHP, gs.getPlayer(enemy).getResources(), eBase);
+    }
+
+    /**
+     * Fast heuristic evaluation — no LLM, runs in microseconds.
      */
     private double evaluateWithHeuristic(int player, GameState gs) {
         PhysicalGameState pgs = gs.getPhysicalGameState();
         int enemy = 1 - player;
 
-        double allyScore  = 0;
-        double enemyScore = 0;
+        double allyScore = 0, enemyScore = 0;
 
         for (Unit u : pgs.getUnits()) {
-            if (u.getPlayer() == -1) continue; // resource
-
-            double unitValue = getUnitValue(u);
-
-            if (u.getPlayer() == player) {
-                allyScore += unitValue;
-            } else {
-                enemyScore += unitValue;
-            }
+            if (u.getPlayer() == -1) continue;
+            double val = getUnitValue(u);
+            if (u.getPlayer() == player) allyScore += val;
+            else enemyScore += val;
         }
 
-        // Resources
         allyScore  += gs.getPlayer(player).getResources() * 0.5;
         enemyScore += gs.getPlayer(enemy).getResources()  * 0.5;
 
         double total = allyScore + enemyScore;
         if (total == 0) return 0.5;
-
         return allyScore / total;
     }
 
     private double getUnitValue(Unit u) {
-        String name = u.getType().name;
         double hpFraction = (double) u.getHitPoints() / u.getType().hp;
-        double baseVal;
-        switch (name) {
-            case "Base":     baseVal = 10.0; break;
-            case "Barracks": baseVal = 5.0;  break;
-            case "Heavy":    baseVal = 4.0;  break;
-            case "Light":    baseVal = 2.5;  break;
-            case "Ranged":   baseVal = 2.5;  break;
-            case "Worker":   baseVal = 1.0;  break;
-            default:         baseVal = 1.0;
+        switch (u.getType().name) {
+            case "Base":     return 10.0 * hpFraction;
+            case "Barracks": return 5.0  * hpFraction;
+            case "Heavy":    return 4.0  * hpFraction;
+            case "Light":    return 2.5  * hpFraction;
+            case "Ranged":   return 2.5  * hpFraction;
+            case "Worker":   return 1.0  * hpFraction;
+            default:         return 1.0  * hpFraction;
         }
-        return baseVal * hpFraction;
     }
 
     // ── Backpropagation ────────────────────────────────────────────────────────
@@ -449,339 +806,67 @@ OUTPUT JSON ONLY:
         }
     }
 
-    // ── Best Action Selection ──────────────────────────────────────────────────
+    // ── Best Action ────────────────────────────────────────────────────────────
 
     private PlayerAction bestAction(MCTSNode root) {
-        if (root.children.isEmpty()) {
-            System.out.println("[MCTS] No children — returning empty action");
-            return new PlayerAction();
-        }
+        if (root.children.isEmpty()) return new PlayerAction();
 
         MCTSNode best = root.children.stream()
                 .max(Comparator.comparingDouble(MCTSNode::avgValue))
                 .orElse(root.children.get(0));
 
-        System.out.printf("[MCTS] Best action: avg=%.3f visits=%d%n",
+        System.out.printf("[MCTS] Best: avg=%.3f visits=%d%n",
                 best.avgValue(), best.visitCount);
+
+        // Store unit map for game thread to use in filterValidAction
+        // Re-parse from best action's state
+        if (best.actionTaken != null) {
+            rebuildUnitMap(best.actionTaken, best.state.getPhysicalGameState(),
+                    best.player, best.state);
+        }
 
         return best.actionTaken != null ? best.actionTaken : new PlayerAction();
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    //  ACTION PARSING
-    //  Converts LLM policy output → PlayerAction (MicroRTS format)
-    // ══════════════════════════════════════════════════════════════════════════
-
-    // unitID -> UnitAction, rebuilt each time parseCandidateActions runs
-    private Map<Long, UnitAction> lastCandidateUnitMap = new HashMap<>();
-
     /**
-     * Parse the LLM policy response into a list of candidate PlayerActions.
-     * Also populates lastCandidateUnitMap with (unitID -> UnitAction).
+     * Rebuild lastCandidateUnitMap from a PlayerAction by matching units
+     * in the game state at the time the action was generated.
+     * Used so filterValidAction can re-apply the action to the live game state.
      */
-    private List<PlayerAction> parseCandidateActions(String response, int player, GameState gs) {
-        List<PlayerAction> actions = new ArrayList<>();
-        lastCandidateUnitMap = new HashMap<>();
-
-        try {
-            JsonObject json = parseJsonResponse(response);
-            if (json == null) return actions;
-
-            JsonArray moves = json.getAsJsonArray("moves");
-            if (moves == null) return actions;
-
-            PhysicalGameState pgs = gs.getPhysicalGameState();
-            Set<String> usedPositions = new HashSet<>();
-            PlayerAction action = new PlayerAction();
-
-            for (JsonElement moveEl : moves) {
-                if (!moveEl.isJsonObject()) continue;
-                JsonObject move = moveEl.getAsJsonObject();
-
-                try {
-                    JsonArray pos = move.getAsJsonArray("unit_position");
-                    if (pos == null || pos.size() < 2) continue;
-
-                    int unitX = pos.get(0).getAsInt();
-                    int unitY = pos.get(1).getAsInt();
-                    String posKey = unitX + "," + unitY;
-                    if (usedPositions.contains(posKey)) continue;
-                    usedPositions.add(posKey);
-
-                    Unit unit = pgs.getUnitAt(unitX, unitY);
-                    if (unit == null || unit.getPlayer() != player) continue;
-                    if (gs.getActionAssignment(unit) != null) continue;
-
-                    String actionType = move.get("action_type").getAsString();
-                    String rawMove    = move.get("raw_move").getAsString();
-
-                    UnitAction ua = parseUnitAction(unit, actionType, rawMove, player, gs, pgs);
-                    if (ua != null) {
-                        action.addUnitAction(unit, ua);
-                        lastCandidateUnitMap.put(unit.getID(), ua);
-                    }
-
-                } catch (Exception e) {
-                    // Skip bad move entry
-                }
+    private void rebuildUnitMap(PlayerAction action, PhysicalGameState pgs,
+                                  int player, GameState gs) {
+        Map<Long, UnitAction> map = new HashMap<>();
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() != player) continue;
+            UnitAction ua = action.getAction(u);
+            if (ua != null && ua.getType() != UnitAction.TYPE_NONE) {
+                map.put(u.getID(), ua);
             }
-
-            if (!action.isEmpty()) {
-                actions.add(action);
-            }
-
-        } catch (Exception e) {
-            System.err.println("[MCTS] Action parse error: " + e.getMessage());
         }
-
-        return actions;
+        lastCandidateUnitMap = map;
     }
 
-    /**
-     * Convert a single LLM move description into a UnitAction.
-     */
-    private UnitAction parseUnitAction(Unit unit, String actionType, String rawMove,
-                                        int player, GameState gs, PhysicalGameState pgs) {
-        try {
-            switch (actionType.toLowerCase()) {
+    // ── Filter valid action ────────────────────────────────────────────────────
 
-                case "move": {
-                    if (unit.getType() == baseType || unit.getType() == barracksType) return null;
-                    Matcher m = Pattern.compile("move\\(\\((\\d+),\\s*(\\d+)\\)\\)").matcher(rawMove);
-                    if (m.find()) {
-                        int tx = Integer.parseInt(m.group(1));
-                        int ty = Integer.parseInt(m.group(2));
-                        UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
-                                tx + ty * pgs.getWidth(), gs, null);
-                        if (moveAction != null) {
-                            return new UnitAction(UnitAction.TYPE_MOVE, moveAction.getDirection());
-                        }
-                    }
-                    break;
-                }
-
-                case "harvest": {
-                    if (unit.getType() != workerType) return null;
-                    Matcher m = Pattern.compile(
-                            "harvest\\(\\((\\d+),\\s*(\\d+)\\),\\s*\\((\\d+),\\s*(\\d+)\\)\\)")
-                            .matcher(rawMove);
-                    if (m.find()) {
-                        int resX  = Integer.parseInt(m.group(1));
-                        int resY  = Integer.parseInt(m.group(2));
-                        int baseX = Integer.parseInt(m.group(3));
-                        int baseY = Integer.parseInt(m.group(4));
-
-                        Unit resource = pgs.getUnitAt(resX, resY);
-                        Unit base     = pgs.getUnitAt(baseX, baseY);
-
-                        if (resource != null && base != null
-                                && base.getType() == baseType
-                                && base.getPlayer() == player) {
-
-                            if (unit.getResources() > 0) {
-                                // Carry back to base — just move toward it; return direction comes from adjacency
-                                UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
-                                        baseX + baseY * pgs.getWidth(), gs, null);
-                                if (moveAction != null) {
-                                    int dir = moveAction.getDirection();
-                                    // If adjacent, issue RETURN; otherwise MOVE
-                                    int dx = Math.abs(unit.getX() - baseX);
-                                    int dy = Math.abs(unit.getY() - baseY);
-                                    if (dx + dy == 1) {
-                                        return new UnitAction(UnitAction.TYPE_RETURN, dir);
-                                    } else {
-                                        return new UnitAction(UnitAction.TYPE_MOVE, dir);
-                                    }
-                                }
-                            } else {
-                                // Go harvest
-                                UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
-                                        resX + resY * pgs.getWidth(), gs, null);
-                                if (moveAction != null) {
-                                    int dir = moveAction.getDirection();
-                                    int dx = Math.abs(unit.getX() - resX);
-                                    int dy = Math.abs(unit.getY() - resY);
-                                    if (dx + dy == 1) {
-                                        return new UnitAction(UnitAction.TYPE_HARVEST, dir);
-                                    } else {
-                                        return new UnitAction(UnitAction.TYPE_MOVE, dir);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-
-                case "build": {
-                    if (unit.getType() != workerType) return null;
-                    Matcher m = Pattern.compile(
-                            "build\\(\\((\\d+),\\s*(\\d+)\\),\\s*(\\w+)\\)").matcher(rawMove);
-                    if (m.find()) {
-                        int bx = Integer.parseInt(m.group(1));
-                        int by = Integer.parseInt(m.group(2));
-                        String bName = m.group(3).toLowerCase();
-                        UnitType bt  = bName.equals("barracks") ? barracksType : baseType;
-
-                        if (gs.getPlayer(player).getResources() >= bt.cost) {
-                            UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
-                                    bx + by * pgs.getWidth(), gs, null);
-                            if (moveAction != null) {
-                                int dir = moveAction.getDirection();
-                                int dx = Math.abs(unit.getX() - bx);
-                                int dy = Math.abs(unit.getY() - by);
-                                if (dx + dy == 1) {
-                                    return new UnitAction(UnitAction.TYPE_PRODUCE, dir, bt);
-                                } else {
-                                    return new UnitAction(UnitAction.TYPE_MOVE, dir);
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-
-                case "train": {
-                    Matcher m = Pattern.compile("train\\((\\w+)\\)").matcher(rawMove);
-                    if (m.find()) {
-                        String uName = m.group(1).toLowerCase();
-                        UnitType trainType = null;
-
-                        if (unit.getType() == baseType && uName.equals("worker")) {
-                            trainType = workerType;
-                        } else if (unit.getType() == barracksType) {
-                            switch (uName) {
-                                case "light":  trainType = lightType;  break;
-                                case "heavy":  trainType = heavyType;  break;
-                                case "ranged": trainType = rangedType; break;
-                            }
-                        }
-
-                        if (trainType != null
-                                && gs.getPlayer(player).getResources() >= trainType.cost) {
-                            // Find a free adjacent direction to spawn
-                            for (int dir = 0; dir < 4; dir++) {
-                                int nx = unit.getX() + UnitAction.DIRECTION_OFFSET_X[dir];
-                                int ny = unit.getY() + UnitAction.DIRECTION_OFFSET_Y[dir];
-                                if (nx >= 0 && ny >= 0
-                                        && nx < pgs.getWidth() && ny < pgs.getHeight()
-                                        && pgs.getUnitAt(nx, ny) == null) {
-                                    return new UnitAction(UnitAction.TYPE_PRODUCE, dir, trainType);
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-
-                case "attack": {
-                    if (unit.getType() == baseType || unit.getType() == barracksType) return null;
-                    Matcher m = Pattern.compile(
-                            "attack\\(\\((\\d+),\\s*(\\d+)\\)\\)").matcher(rawMove);
-                    if (m.find()) {
-                        int tx = Integer.parseInt(m.group(1));
-                        int ty = Integer.parseInt(m.group(2));
-                        Unit target = pgs.getUnitAt(tx, ty);
-
-                        if (target != null && target.getPlayer() != player
-                                && target.getPlayer() != -1) {
-
-                            int dx = Math.abs(unit.getX() - tx);
-                            int dy = Math.abs(unit.getY() - ty);
-                            int dist = dx + dy;
-
-                            if (dist <= unit.getType().attackRange) {
-                                return new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
-                                        tx + ty * pgs.getWidth());
-                            } else {
-                                UnitAction moveAction = pf.findPathToAdjacentPosition(unit,
-                                        tx + ty * pgs.getWidth(), gs, null);
-                                if (moveAction != null) {
-                                    return new UnitAction(UnitAction.TYPE_MOVE,
-                                            moveAction.getDirection());
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        } catch (Exception e) {
-            // Return null for any parsing failure
-        }
-        return null;
-    }
-
-    /**
-     * Filter a PlayerAction to remove commands for units that no longer exist
-     * or are no longer idle (since the MCTS ran a few ticks ago).
-     */
-    /**
-     * Rebuild a PlayerAction using lastCandidateUnitMap (unitID -> UnitAction),
-     * filtered to units that are still alive and idle in the current game state.
-     * This avoids calling getActions() whose return type varies by MicroRTS version.
-     */
-    private PlayerAction filterValidAction(PlayerAction ignored, int player, GameState gs) {
+    private PlayerAction filterValidAction(int player, GameState gs) {
         PhysicalGameState pgs = gs.getPhysicalGameState();
         PlayerAction valid = new PlayerAction();
+        Map<Long, UnitAction> map = lastCandidateUnitMap;
 
         for (Unit u : pgs.getUnits()) {
             if (u.getPlayer() != player) continue;
             if (gs.getActionAssignment(u) != null) continue;
-
-            UnitAction ua = lastCandidateUnitMap.get(u.getID());
-            if (ua != null) {
+            UnitAction ua = map.get(u.getID());
+            if (ua != null && ua.getType() != UnitAction.TYPE_NONE
+                    && gs.isUnitActionAllowed(u, ua)) {
                 valid.addUnitAction(u, ua);
             }
         }
-
         return valid;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  GAME STATE DESCRIPTION
-    // ══════════════════════════════════════════════════════════════════════════
-
-    private String buildGameStatePrompt(int player, GameState gs) {
-        PhysicalGameState pgs = gs.getPhysicalGameState();
-        Player p = gs.getPlayer(player);
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("Turn: ").append(gs.getTime()).append("/1500\n");
-        sb.append("Resources: ").append(p.getResources()).append("\n");
-        sb.append("Map: ").append(pgs.getWidth()).append("x").append(pgs.getHeight()).append("\n\n");
-        sb.append("Units:\n");
-
-        int idleAllies = 0;
-
-        for (Unit u : pgs.getUnits()) {
-            String team;
-            if (u.getPlayer() == player)       team = "Ally";
-            else if (u.getPlayer() == -1)      team = "Resource";
-            else                               team = "Enemy";
-
-            sb.append("(").append(u.getX()).append(", ").append(u.getY()).append(") ");
-            sb.append(team).append(" ").append(u.getType().name);
-            sb.append(" {HP=").append(u.getHitPoints());
-
-            if (u.getResources() > 0) sb.append(", Res=").append(u.getResources());
-
-            UnitActionAssignment uaa = gs.getActionAssignment(u);
-            if (uaa != null) {
-                sb.append(", Status=busy}");
-            } else {
-                sb.append(", Status=idling}");
-                if (u.getPlayer() == player) idleAllies++;
-            }
-            sb.append("\n");
-        }
-
-        sb.append("\nIdle ally units to command: ").append(idleAllies);
-        return sb.toString();
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    //  LLM API CALL (Ollama OpenAI-compatible)
+    //  LLM API CALL
     // ══════════════════════════════════════════════════════════════════════════
 
     private String callLLM(String userPrompt, String systemPrompt) {
@@ -798,11 +883,10 @@ OUTPUT JSON ONLY:
             request.addProperty("model", OLLAMA_MODEL);
 
             JsonArray messages = new JsonArray();
-
             JsonObject sysMsg = new JsonObject();
             sysMsg.addProperty("role", "system");
-            sysMsg.addProperty("content", systemPrompt +
-                    "\nIMPORTANT: Respond ONLY with valid JSON. No markdown, no backticks.");
+            sysMsg.addProperty("content", systemPrompt
+                    + "\nRespond ONLY with valid JSON. No markdown, no backticks.");
             messages.add(sysMsg);
 
             JsonObject userMsg = new JsonObject();
@@ -811,13 +895,11 @@ OUTPUT JSON ONLY:
             messages.add(userMsg);
 
             request.add("messages", messages);
-
-            JsonObject responseFormat = new JsonObject();
-            responseFormat.addProperty("type", "json_object");
-            request.add("response_format", responseFormat);
-
-            request.addProperty("temperature", 0.3);
-            request.addProperty("max_tokens", 1024);
+            JsonObject fmt = new JsonObject();
+            fmt.addProperty("type", "json_object");
+            request.add("response_format", fmt);
+            request.addProperty("temperature", 0.2);
+            request.addProperty("max_tokens", 64); // eval only needs score + reason
 
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(request.toString().getBytes(StandardCharsets.UTF_8));
@@ -830,7 +912,6 @@ OUTPUT JSON ONLY:
                     StringBuilder resp = new StringBuilder();
                     String line;
                     while ((line = br.readLine()) != null) resp.append(line);
-
                     JsonObject jsonResp = JsonParser.parseString(resp.toString()).getAsJsonObject();
                     JsonArray choices = jsonResp.getAsJsonArray("choices");
                     if (choices != null && choices.size() > 0) {
@@ -840,35 +921,25 @@ OUTPUT JSON ONLY:
                     }
                 }
             } else {
-                try (BufferedReader br = new BufferedReader(
-                        new InputStreamReader(conn.getErrorStream(), StandardCharsets.UTF_8))) {
-                    StringBuilder err = new StringBuilder();
-                    String line;
-                    while ((line = br.readLine()) != null) err.append(line);
-                    System.err.println("[MCTS] API error " + code + ": " + err);
-                }
+                System.err.println("[MCTS] API error " + code);
             }
-
         } catch (Exception e) {
             System.err.println("[MCTS] LLM call failed: " + e.getMessage());
         }
-
-        return "{\"thinking\":\"error\",\"moves\":[],\"score\":50}";
+        return "{\"score\":50,\"reason\":\"error\"}";
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  JSON UTILITIES
+    //  UTILITIES
     // ══════════════════════════════════════════════════════════════════════════
 
     private JsonObject parseJsonResponse(String response) {
-        // Strip <think>...</think> blocks (qwen3 thinking mode)
         response = response.replaceAll("(?s)<think>.*?</think>", "").trim();
-
         try {
             return JsonParser.parseString(response).getAsJsonObject();
         } catch (Exception e) {
             int start = response.indexOf("{");
-            int end   = response.lastIndexOf("}") + 1;
+            int end = response.lastIndexOf("}") + 1;
             if (start >= 0 && end > start) {
                 try {
                     return JsonParser.parseString(response.substring(start, end)).getAsJsonObject();
@@ -878,9 +949,29 @@ OUTPUT JSON ONLY:
         return null;
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    //  REQUIRED OVERRIDES
-    // ══════════════════════════════════════════════════════════════════════════
+    private Unit nearestUnit(Unit src, List<Unit> units) {
+        return nearestUnit(src.getX(), src.getY(), units);
+    }
+
+    private Unit nearestUnit(int x, int y, List<Unit> units) {
+        Unit best = null;
+        int bestDist = Integer.MAX_VALUE;
+        for (Unit u : units) {
+            int dist = Math.abs(x - u.getX()) + Math.abs(y - u.getY());
+            if (dist < bestDist) { bestDist = dist; best = u; }
+        }
+        return best;
+    }
+
+    private int dirTo(int fromX, int fromY, int toX, int toY) {
+        int dx = toX - fromX;
+        int dy = toY - fromY;
+        if (Math.abs(dx) >= Math.abs(dy)) {
+            return dx > 0 ? UnitAction.DIRECTION_RIGHT : UnitAction.DIRECTION_LEFT;
+        } else {
+            return dy > 0 ? UnitAction.DIRECTION_DOWN : UnitAction.DIRECTION_UP;
+        }
+    }
 
     @Override
     public List<ParameterSpecification> getParameters() {
