@@ -1,0 +1,9 @@
+{
+  "team_name": "yepure",
+  "display_name": "yepure",
+  "agent_class": "yepure",
+  "agent_file": "yepure.java",
+  "model_provider": "ollama",
+  "model_name": "llama4:latest",
+  "description": "LLM-Guided MCTS Agent for MicroRTS"
+}
