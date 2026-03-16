@@ -472,12 +472,16 @@ OUTPUT JSON ONLY:
     //  Converts LLM policy output → PlayerAction (MicroRTS format)
     // ══════════════════════════════════════════════════════════════════════════
 
+    // unitID -> UnitAction, rebuilt each time parseCandidateActions runs
+    private Map<Long, UnitAction> lastCandidateUnitMap = new HashMap<>();
+
     /**
      * Parse the LLM policy response into a list of candidate PlayerActions.
-     * Each "moves" array in the LLM response becomes one PlayerAction.
+     * Also populates lastCandidateUnitMap with (unitID -> UnitAction).
      */
     private List<PlayerAction> parseCandidateActions(String response, int player, GameState gs) {
         List<PlayerAction> actions = new ArrayList<>();
+        lastCandidateUnitMap = new HashMap<>();
 
         try {
             JsonObject json = parseJsonResponse(response);
@@ -514,6 +518,7 @@ OUTPUT JSON ONLY:
                     UnitAction ua = parseUnitAction(unit, actionType, rawMove, player, gs, pgs);
                     if (ua != null) {
                         action.addUnitAction(unit, ua);
+                        lastCandidateUnitMap.put(unit.getID(), ua);
                     }
 
                 } catch (Exception e) {
@@ -711,27 +716,22 @@ OUTPUT JSON ONLY:
      * Filter a PlayerAction to remove commands for units that no longer exist
      * or are no longer idle (since the MCTS ran a few ticks ago).
      */
-    private PlayerAction filterValidAction(PlayerAction action, int player, GameState gs) {
+    /**
+     * Rebuild a PlayerAction using lastCandidateUnitMap (unitID -> UnitAction),
+     * filtered to units that are still alive and idle in the current game state.
+     * This avoids calling getActions() whose return type varies by MicroRTS version.
+     */
+    private PlayerAction filterValidAction(PlayerAction ignored, int player, GameState gs) {
         PhysicalGameState pgs = gs.getPhysicalGameState();
         PlayerAction valid = new PlayerAction();
 
-        for (rts.Pair<Unit, UnitAction> pair : action.getActions()) {
-            Unit storedUnit = pair.m_a;
-            UnitAction ua   = pair.m_b;
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() != player) continue;
+            if (gs.getActionAssignment(u) != null) continue;
 
-            // Find the unit by ID in the current state
-            Unit liveUnit = null;
-            for (Unit u : pgs.getUnits()) {
-                if (u.getID() == storedUnit.getID()) {
-                    liveUnit = u;
-                    break;
-                }
-            }
-
-            if (liveUnit != null
-                    && liveUnit.getPlayer() == player
-                    && gs.getActionAssignment(liveUnit) == null) {
-                valid.addUnitAction(liveUnit, ua);
+            UnitAction ua = lastCandidateUnitMap.get(u.getID());
+            if (ua != null) {
+                valid.addUnitAction(u, ua);
             }
         }
 
