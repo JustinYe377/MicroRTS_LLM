@@ -1,18 +1,37 @@
 /*
- * yebot — LLMInformedMCTS + Worker Rush Defense
+ * yebot — PureLLM with Chain of Summarization (CoS)
  *
- * Architecture :
- *   PRIMARY:  LLMInformedMCTS — the shared tournament library
- *             - 200ms MCTS time budget per tick, runs instantly
- *             - LLM consulted only ~2-3x per 500 ticks for strategic goals
- *             - LLMPolicyProbabilityDistribution biases search without blocking
- *   DEFENSE:  Worker Rush Detector — pure heuristic, runs every tick first
- *             - Intercepts early worker rushes before they reach base
- *             - Focus-fires weakest enemy workers, trains emergency workers
- *   FALLBACK: Heuristic action — used if LLMInformedMCTS returns empty/fails
- *             - Harvest, attack nearest, train units — no LLM, instant
+ * Inspired by TextStarCraft II (NeurIPS 2024) Chain of Summarization method.
+ * Adapted for MicroRTS's faster pace and simpler action space.
  *
- *   yebot  fallback = lightweight heuristic (our own, no borrowed AI)
+ * ┌─────────────────────────────────────────────────────────────────┐
+ * │                   CHAIN OF SUMMARIZATION                        │
+ * │                                                                 │
+ * │  Every tick (instant, rule-based):                              │
+ * │    Raw game state → L1 Frame Summary                            │
+ * │    (structured text snapshot: units, threats, resources)        │
+ * │                      ↓                                          │
+ * │    Stored in Frame Queue (last K=5 frames)                      │
+ * │                                                                 │
+ * │  Every LLM_INTERVAL ticks (async, background):                 │
+ * │    Frame Queue → L2 Multi-Frame Summary (LLM call)              │
+ * │    (trend analysis: "enemy army growing", "economy stalling")   │
+ * │                      ↓                                          │
+ * │    L2 output → Action Extractor                                 │
+ * │    (maps LLM decisions to VALID pre-computed action vocabulary) │
+ * │                      ↓                                          │
+ * │    Action Queue filled for next K ticks                         │
+ * └─────────────────────────────────────────────────────────────────┘
+ *
+ * Key difference from raw PureLLM:
+ *   Raw PureLLM: LLM outputs raw coordinates → often invalid/hallucinated
+ *   CoS PureLLM: LLM picks from pre-validated action vocabulary → always valid
+ *
+ * The action vocabulary is built fresh each tick from the actual game state,
+ * so every action the LLM can choose is guaranteed to be executable.
+ *
+ * This keeps it PureLLM: the LLM still decides WHAT to do for every unit.
+ * The rule layer only ensures the HOW is physically possible.
  *
  * @author Ye
  * Team: yebot
@@ -24,27 +43,80 @@ import ai.abstraction.pathfinding.AStarPathFinding;
 import ai.abstraction.pathfinding.PathFinding;
 import ai.core.AI;
 import ai.core.ParameterSpecification;
-import ai.mcts.llmguided.LLMInformedMCTS;
+import com.google.gson.*;
 import rts.*;
 import rts.units.*;
 
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.*;
 
 public class yebot extends AbstractionLayerAI {
 
-    // ─── Worker Rush Defense Config ────────────────────────────────────────────
-    private static final int RUSH_DETECT_RADIUS    = 6;   // manhattan distance to base
-    private static final int RUSH_WORKER_THRESHOLD = 2;   // min enemy workers to trigger
-    private static final int RUSH_EARLY_TICKS      = 200; // only active in early game
+    // ─── API Config ────────────────────────────────────────────────────────────
+    private static final String OLLAMA_MODEL = System.getenv("OLLAMA_MODEL") != null
+            ? System.getenv("OLLAMA_MODEL") : "llama4:latest";
+    private static final String API_URL = System.getenv("OLLAMA_URL") != null
+            ? System.getenv("OLLAMA_URL") : "http://localhost:11434/v1/chat/completions";
+    private static final int LLM_TIMEOUT  = 20000;
+
+    // ─── CoS Config ───────────────────────────────────────────────────────────
+    private static final int FRAME_QUEUE_SIZE = 8;  // K: more history = richer L2 context
+    private static final int LLM_INTERVAL     = 200; // ~7 LLM calls per 1500-tick game
+    // Action queue: reuse each decision for 200 ticks
+    // At 3s per LLM call: 7 calls × 3s = ~21s of LLM time per game
+    private static final int ACTION_QUEUE_TTL = 200;
 
     // ─── Unit Types ────────────────────────────────────────────────────────────
     private UnitTypeTable utt;
     private UnitType workerType, lightType, heavyType, rangedType, baseType, barracksType;
 
-    // ─── LLMInformedMCTS primary engine ────────────────────────────────────────
-    private final LLMInformedMCTS searchAgent;
-    private int lastSearchTick = -9999;
-    private static final int SEARCH_INTERVAL = 1; // run every tick (it has its own 200ms budget)
+    // ─── CoS State ────────────────────────────────────────────────────────────
+    // Frame Queue: circular buffer of L1 summaries (rule-based, instant)
+    private final Deque<String> frameQueue = new ArrayDeque<>();
+
+    // Action Queue: pre-validated actions the LLM decided, valid for ACTION_QUEUE_TTL ticks
+    // Key = unit ID, Value = the validated UnitAction to execute
+    private volatile Map<Long, UnitAction> actionQueue = new HashMap<>();
+    private volatile int actionQueueExpiry = -1; // tick when queue expires
+
+    // Async L2 state
+    private final ExecutorService llmThread = Executors.newSingleThreadExecutor();
+    private volatile boolean llmRunning = false;
+    private int lastLLMTick = -LLM_INTERVAL;
+
+    // ─── L2 System Prompt ─────────────────────────────────────────────────────
+    private static final String L2_SYSTEM_PROMPT = """
+You are a MicroRTS strategic advisor. You receive a sequence of game state snapshots
+and must issue commands for each idle unit.
+
+=== UNIT REFERENCE ===
+Worker  HP=1  dmg=1  range=1  — harvests resources, builds barracks (cost=1)
+Light   HP=4  dmg=2  range=1  — fast melee fighter (cost=2)
+Heavy   HP=8  dmg=4  range=1  — slow tank (cost=3)
+Ranged  HP=3  dmg=1  range=3  — attacks from distance (cost=2)
+Base    HP=10          — produces workers; PROTECT THIS (cost=10)
+Barracks HP=5          — produces military units (cost=5)
+
+=== YOUR ACTION VOCABULARY ===
+You MUST only use action IDs from the AVAILABLE ACTIONS list below.
+Do NOT invent new action IDs. Every ID in the list is guaranteed valid.
+
+=== OUTPUT FORMAT (JSON only) ===
+{
+  "analysis": "1-2 sentences: what is the trend across recent frames?",
+  "strategy": "1 sentence: what is the priority this turn?",
+  "assignments": [
+    {"unit_id": "<ID from available actions>", "action_id": "<ACTION_ID>"}
+  ]
+}
+
+Each unit_id and action_id MUST exactly match an entry in AVAILABLE ACTIONS.
+Assign at most one action per unit. Unassigned units will idle.
+""";
 
     // ══════════════════════════════════════════════════════════════════════════
     //  CONSTRUCTORS / RESET
@@ -57,27 +129,20 @@ public class yebot extends AbstractionLayerAI {
     public yebot(UnitTypeTable a_utt, PathFinding a_pf) {
         super(a_pf);
         reset(a_utt);
-
-        LLMInformedMCTS tmp;
-        try {
-            tmp = new LLMInformedMCTS(a_utt);
-        } catch (Exception e) {
-            tmp = null;
-            System.err.println("[yebot] LLMInformedMCTS init failed, using heuristic only: "
-                    + e.getMessage());
-        }
-        searchAgent = tmp;
     }
 
     @Override
     public void reset() {
         super.reset();
-        lastSearchTick = -9999;
-        if (searchAgent != null) searchAgent.reset();
+        frameQueue.clear();
+        actionQueue    = new HashMap<>();
+        actionQueueExpiry = -1;
+        llmRunning     = false;
+        lastLLMTick    = -LLM_INTERVAL;
     }
 
     public void reset(UnitTypeTable a_utt) {
-        utt = a_utt;
+        utt          = a_utt;
         workerType   = utt.getUnitType("Worker");
         lightType    = utt.getUnitType("Light");
         heavyType    = utt.getUnitType("Heavy");
@@ -87,9 +152,7 @@ public class yebot extends AbstractionLayerAI {
     }
 
     @Override
-    public AI clone() {
-        return new yebot(utt, pf);
-    }
+    public AI clone() { return new yebot(utt, pf); }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  MAIN ENTRY POINT
@@ -98,361 +161,626 @@ public class yebot extends AbstractionLayerAI {
     @Override
     public PlayerAction getAction(int player, GameState gs) throws Exception {
         PhysicalGameState pgs = gs.getPhysicalGameState();
+        int tick = gs.getTime();
 
-        // ── PRIORITY 1: Worker Rush Defense ───────────────────────────────────
-        // Pure heuristic — runs every tick, instant, no LLM involved.
-        // Fires before LLMInformedMCTS so even if search is slow, defense works.
-        if (isWorkerRush(player, gs, pgs)) {
-            System.out.println("[yebot] RUSH at t=" + gs.getTime() + " — defending");
-            PlayerAction defense = buildWorkerRushDefense(player, gs, pgs);
-            defense.fillWithNones(gs, player, 1);
-            return defense;
-        }
+        // ── L1: Build frame summary (instant, rule-based) ─────────────────────
+        String l1 = buildL1Summary(player, gs, pgs);
 
-        // ── PRIORITY 2: LLMInformedMCTS ───────────────────────────────────────
-        if (searchAgent != null
-                && gs.getTime() - lastSearchTick >= SEARCH_INTERVAL) {
-            try {
-                PlayerAction searchAction = searchAgent.getAction(player, gs);
-                lastSearchTick = gs.getTime();
+        // Add to frame queue — keep last FRAME_QUEUE_SIZE frames
+        frameQueue.addLast(l1);
+        while (frameQueue.size() > FRAME_QUEUE_SIZE) frameQueue.pollFirst();
 
-                // Only use search result if it contains real (non-NONE) actions
-                if (searchAction != null && searchAction.hasNonNoneActions()) {
-                    return searchAction;
+        // ── Build action vocabulary only when about to call LLM ─────────────
+        // Vocab building runs A* per unit — only do this work when needed.
+        // Between LLM calls, just apply the cached actionQueue.
+        boolean needVocab = !llmRunning && tick - lastLLMTick >= LLM_INTERVAL;
+        ActionVocabulary vocab = needVocab ? buildActionVocabulary(player, gs, pgs) : null;
+
+        // ── Fire async L2 if interval elapsed and vocab is non-empty ──────────
+        if (needVocab && vocab != null && !vocab.isEmpty()) {
+            lastLLMTick = tick;
+            llmRunning  = true;
+            final String frameHistory = buildFrameHistory();
+            final ActionVocabulary vocabCopy = vocab;
+            final int tickCopy = tick;
+            final int playerCopy = player;
+            llmThread.submit(() -> {
+                try {
+                    Map<Long, UnitAction> result = callL2LLM(
+                            frameHistory, vocabCopy, playerCopy);
+                    if (!result.isEmpty()) {
+                        actionQueue       = result;
+                        actionQueueExpiry = tickCopy + ACTION_QUEUE_TTL;
+                    }
+                } catch (Exception e) {
+                    System.err.println("[yebot] L2 error: " + e.getMessage());
+                } finally {
+                    llmRunning = false;
                 }
-            } catch (Exception e) {
-                System.err.println("[yebot] LLMInformedMCTS failed at t=" + gs.getTime()
-                        + ": " + e.getMessage());
-            }
+            });
         }
 
-        // ── PRIORITY 3: Heuristic fallback ────────────────────────────────────
-        // Our own logic — no borrowed AI, no LLM calls.
-        PlayerAction fallback = buildHeuristicAction(player, gs, pgs);
-        fallback.fillWithNones(gs, player, 1);
-        return fallback;
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    //  WORKER RUSH DETECTION
-    // ══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Detect a worker rush: 2+ enemy workers within distance 6 of our base
-     * in the first 200 ticks.
-     */
-    private boolean isWorkerRush(int player, GameState gs, PhysicalGameState pgs) {
-        if (gs.getTime() > RUSH_EARLY_TICKS) return false;
-
-        Unit myBase = null;
-        for (Unit u : pgs.getUnits()) {
-            if (u.getPlayer() == player && u.getType() == baseType) {
-                myBase = u;
-                break;
-            }
-        }
-        if (myBase == null) return false;
-
-        int rushingWorkers = 0;
-        for (Unit u : pgs.getUnits()) {
-            if (u.getPlayer() == player || u.getPlayer() == -1) continue;
-            if (u.getType() != workerType) continue;
-            int dist = Math.abs(u.getX() - myBase.getX())
-                     + Math.abs(u.getY() - myBase.getY());
-            if (dist <= RUSH_DETECT_RADIUS) rushingWorkers++;
-        }
-
-        return rushingWorkers >= RUSH_WORKER_THRESHOLD;
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    //  WORKER RUSH DEFENSE
-    // ══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Worker rush defense logic.
-     *
-     * Worker rushes are a numbers game — each worker has 1 HP, 1 damage.
-     * Winning strategy:
-     *   1. Focus-fire weakest enemy workers first (maximize kills per tick)
-     *   2. All idle ally workers intercept — don't harvest during a rush
-     *   3. Base spams workers toward the rush direction
-     *   4. Any combat units also engage
-     */
-    private PlayerAction buildWorkerRushDefense(int player, GameState gs,
-                                                  PhysicalGameState pgs) {
+        // ── Apply action queue to currently idle units ─────────────────────────
+        // Queue expires after ACTION_QUEUE_TTL ticks — units acted, died, or changed
         PlayerAction pa = new PlayerAction();
 
-        Unit myBase = null;
-        List<Unit> myWorkers    = new ArrayList<>();
-        List<Unit> myCombat     = new ArrayList<>();
-        List<Unit> enemyWorkers = new ArrayList<>();
-        List<Unit> enemyCombat  = new ArrayList<>();
+        if (tick <= actionQueueExpiry) {
+            Map<Long, UnitAction> queue = actionQueue;
+            for (Unit u : pgs.getUnits()) {
+                if (u.getPlayer() != player) continue;
+                if (gs.getActionAssignment(u) != null) continue;
 
-        for (Unit u : pgs.getUnits()) {
-            if (u.getPlayer() == player) {
-                if (u.getType() == baseType)   myBase = u;
-                if (u.getType() == workerType) myWorkers.add(u);
-                if (u.getType().canAttack
-                        && u.getType() != baseType
-                        && u.getType() != barracksType
-                        && u.getType() != workerType) myCombat.add(u);
-            } else if (u.getPlayer() != -1) {
-                if (u.getType() == workerType) enemyWorkers.add(u);
-                else if (u.getType().canAttack) enemyCombat.add(u);
-            }
-        }
-
-        // Sort enemy workers by HP asc — kill weakest first for guaranteed eliminations
-        enemyWorkers.sort(Comparator.comparingInt(Unit::getHitPoints));
-
-        List<Unit> threats = new ArrayList<>(enemyWorkers);
-        threats.addAll(enemyCombat);
-
-        // ── All my workers intercept ──────────────────────────────────────────
-        for (Unit worker : myWorkers) {
-            if (gs.getActionAssignment(worker) != null) continue;
-            if (threats.isEmpty()) break;
-
-            Unit target = nearestUnit(worker, threats);
-            if (target == null) continue;
-
-            int dist = Math.abs(worker.getX() - target.getX())
-                     + Math.abs(worker.getY() - target.getY());
-
-            if (dist <= worker.getType().attackRange) {
-                UnitAction atk = new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
-                        target.getX() + target.getY() * pgs.getWidth());
-                if (gs.isUnitActionAllowed(worker, atk)) {
-                    pa.addUnitAction(worker, atk);
-                    // Expect to kill — remove from threat list
-                    if (target.getHitPoints() <= worker.getType().maxDamage) {
-                        threats.remove(target);
-                    }
-                    continue;
+                UnitAction ua = queue.get(u.getID());
+                if (ua != null && ua.getType() != UnitAction.TYPE_NONE
+                        && gs.isUnitActionAllowed(u, ua)) {
+                    pa.addUnitAction(u, ua);
                 }
             }
-
-            UnitAction move = pf.findPathToAdjacentPosition(worker,
-                    target.getX() + target.getY() * pgs.getWidth(), gs, null);
-            if (move != null && gs.isUnitActionAllowed(worker, move)) {
-                pa.addUnitAction(worker, move);
-            }
         }
 
-        // ── Combat units also engage ──────────────────────────────────────────
-        for (Unit unit : myCombat) {
-            if (gs.getActionAssignment(unit) != null) continue;
-            if (threats.isEmpty()) break;
-
-            Unit target = nearestUnit(unit, threats);
-            if (target == null) continue;
-
-            int dist = Math.abs(unit.getX() - target.getX())
-                     + Math.abs(unit.getY() - target.getY());
-
-            if (dist <= unit.getType().attackRange) {
-                UnitAction atk = new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
-                        target.getX() + target.getY() * pgs.getWidth());
-                if (gs.isUnitActionAllowed(unit, atk)) {
-                    pa.addUnitAction(unit, atk);
-                    continue;
-                }
-            }
-
-            UnitAction move = pf.findPathToAdjacentPosition(unit,
-                    target.getX() + target.getY() * pgs.getWidth(), gs, null);
-            if (move != null && gs.isUnitActionAllowed(unit, move)) {
-                pa.addUnitAction(unit, move);
-            }
-        }
-
-        // ── Base trains emergency worker toward rush ───────────────────────────
-        if (myBase != null && gs.getActionAssignment(myBase) == null
-                && gs.getPlayer(player).getResources() >= workerType.cost) {
-            int dir = findBestSpawnDir(myBase, pgs, threats);
-            UnitAction train = new UnitAction(UnitAction.TYPE_PRODUCE, dir, workerType);
-            if (gs.isUnitActionAllowed(myBase, train)) {
-                pa.addUnitAction(myBase, train);
-            }
-        }
-
+        pa.fillWithNones(gs, player, 1);
         return pa;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  HEURISTIC FALLBACK
+    //  L1 SUMMARY — rule-based, instant, every tick
+    //
+    //  Equivalent to SC2's L1 (single-frame) summarization.
+    //  Compresses raw game state into structured text.
+    //  No LLM involved — pure Java computation.
     // ══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Lightweight heuristic action — no LLM, no borrowed AI.
-     * Priority per unit type:
-     *   Military  → attack nearest enemy, or move toward them
-     *   Worker    → return if carrying → harvest → move to resource
-     *   Base      → train worker if < 2 workers
-     *   Barracks  → train ranged (cheapest combat unit with range advantage)
-     */
-    private PlayerAction buildHeuristicAction(int player, GameState gs,
-                                               PhysicalGameState pgs) {
-        PlayerAction pa = new PlayerAction();
+    private String buildL1Summary(int player, GameState gs, PhysicalGameState pgs) {
+        int enemy = 1 - player;
+        int tick  = gs.getTime();
+        int myRes = gs.getPlayer(player).getResources();
+        int enRes = gs.getPlayer(enemy).getResources();
 
-        List<Unit> myUnits   = new ArrayList<>();
+        int myWorkers = 0, myMilitary = 0, myBarracks = 0, myBaseHP = 0;
+        int enWorkers = 0, enMilitary = 0, enBaseHP = 0;
+        int resources = 0;
+        int myIdleWorkers = 0, myIdleMilitary = 0;
+
+        for (Unit u : pgs.getUnits()) {
+            UnitType t = u.getType();
+            if (t.isResource) { resources++; continue; }
+            boolean idle = gs.getActionAssignment(u) == null;
+
+            if (u.getPlayer() == player) {
+                if (t == workerType)     { myWorkers++;  if (idle) myIdleWorkers++; }
+                else if (t == barracksType) myBarracks++;
+                else if (t == baseType)  myBaseHP = u.getHitPoints();
+                else if (t.canAttack)    { myMilitary++; if (idle) myIdleMilitary++; }
+            } else {
+                if (t == workerType)     enWorkers++;
+                else if (t == baseType)  enBaseHP = u.getHitPoints();
+                else if (t.canAttack)    enMilitary++;
+            }
+        }
+
+        // Threat level: how urgent is the situation?
+        String threat;
+        if (enMilitary >= myMilitary + 2) threat = "HIGH";
+        else if (enMilitary > myMilitary) threat = "MEDIUM";
+        else threat = "LOW";
+
+        // Economy status
+        String economy;
+        if (myRes >= 5) economy = "SURPLUS";
+        else if (myRes >= 2) economy = "ADEQUATE";
+        else economy = "SCARCE";
+
+        return String.format(
+            "[T=%d] res=%d(%s) myBase=%dHP myArmy=%d(idle=%d) myWorkers=%d(idle=%d) myBarracks=%d | " +
+            "enBase=%dHP enArmy=%d enWorkers=%d enRes=%d | mapRes=%d | threat=%s",
+            tick, myRes, economy,
+            myBaseHP, myMilitary, myIdleMilitary,
+            myWorkers, myIdleWorkers, myBarracks,
+            enBaseHP, enMilitary, enWorkers, enRes,
+            resources, threat
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  ACTION VOCABULARY — pre-validated legal moves, built every tick
+    //
+    //  This is the core of CoS for MicroRTS.
+    //  Every entry is a (unitID, actionID, UnitAction) triple.
+    //  The LLM only picks action IDs from this list — impossible to hallucinate
+    //  an invalid coordinate or an illegal action.
+    //
+    //  Action IDs are human-readable strings like:
+    //    "W1_harvest_res2_1"  (worker 1 harvests resource at (2,1))
+    //    "B2_train_ranged"    (barracks 2 trains ranged unit)
+    //    "R3_attack_E5_6"     (ranged unit 3 attacks enemy at (5,6))
+    //    "L4_move_toward_E"   (light unit 4 moves toward nearest enemy)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private static class ActionEntry {
+        final String unitId;    // e.g. "W1" (worker 1), "B0" (base 0)
+        final String actionId;  // human-readable ID for LLM
+        final long   unitUID;   // actual unit ID for game engine
+        final UnitAction action; // the actual UnitAction to execute
+
+        ActionEntry(String unitId, String actionId, long unitUID, UnitAction action) {
+            this.unitId   = unitId;
+            this.actionId = actionId;
+            this.unitUID  = unitUID;
+            this.action   = action;
+        }
+    }
+
+    private static class ActionVocabulary {
+        final List<ActionEntry> entries = new ArrayList<>();
+        // Map actionId → ActionEntry for fast lookup during response parsing
+        final Map<String, ActionEntry> byActionId = new HashMap<>();
+        // Map unitId → list of possible actions
+        final Map<String, List<ActionEntry>> byUnitId = new LinkedHashMap<>();
+
+        void add(ActionEntry e) {
+            entries.add(e);
+            byActionId.put(e.actionId, e);
+            byUnitId.computeIfAbsent(e.unitId, k -> new ArrayList<>()).add(e);
+        }
+
+        boolean isEmpty() { return entries.isEmpty(); }
+
+        /** Format vocabulary for LLM prompt */
+        String format() {
+            StringBuilder sb = new StringBuilder();
+            for (Map.Entry<String, List<ActionEntry>> unitEntry : byUnitId.entrySet()) {
+                String unitId = unitEntry.getKey();
+                sb.append("Unit ").append(unitId).append(":\n");
+                for (ActionEntry ae : unitEntry.getValue()) {
+                    sb.append("  ").append(ae.actionId).append("\n");
+                }
+            }
+            return sb.toString();
+        }
+    }
+
+    private ActionVocabulary buildActionVocabulary(int player, GameState gs,
+                                                     PhysicalGameState pgs) {
+        ActionVocabulary vocab = new ActionVocabulary();
+
+        // Counters for readable unit IDs
+        int wCount = 0, lCount = 0, hCount = 0, rCount = 0, bCount = 0, rkCount = 0;
+
+        // Collect enemies and resources for targeting
         List<Unit> enemies   = new ArrayList<>();
         List<Unit> resources = new ArrayList<>();
         Unit myBase = null;
-        int workerCount = 0;
 
         for (Unit u : pgs.getUnits()) {
-            if (u.getPlayer() == player) {
-                myUnits.add(u);
-                if (u.getType() == workerType) workerCount++;
-                if (u.getType() == baseType)   myBase = u;
-            } else if (u.getPlayer() == -1) {
-                resources.add(u);
-            } else {
-                enemies.add(u);
+            if (u.getType().isResource) { resources.add(u); continue; }
+            if (u.getPlayer() == player && u.getType() == baseType) myBase = u;
+            if (u.getPlayer() != player && u.getPlayer() != -1) enemies.add(u);
+        }
+
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() != player) continue;
+            if (gs.getActionAssignment(u) != null) continue; // busy — skip
+
+            UnitType t = u.getType();
+            int myResources = gs.getPlayer(player).getResources();
+
+            if (t == workerType) {
+                String uid = "W" + wCount++;
+                addWorkerActions(vocab, u, uid, myBase, enemies, resources, gs, pgs, player);
+
+            } else if (t == lightType) {
+                String uid = "L" + lCount++;
+                addMilitaryActions(vocab, u, uid, enemies, gs, pgs);
+
+            } else if (t == heavyType) {
+                String uid = "H" + hCount++;
+                addMilitaryActions(vocab, u, uid, enemies, gs, pgs);
+
+            } else if (t == rangedType) {
+                String uid = "R" + rCount++;
+                addMilitaryActions(vocab, u, uid, enemies, gs, pgs);
+
+            } else if (t == baseType) {
+                String uid = "BASE" + bCount++;
+                addBaseActions(vocab, u, uid, myResources, gs, pgs);
+
+            } else if (t == barracksType) {
+                String uid = "BRX" + rkCount++;
+                addBarracksActions(vocab, u, uid, myResources, gs, pgs, enemies);
             }
         }
 
-        final int wc = workerCount;
-        final Unit base = myBase;
-
-        for (Unit unit : myUnits) {
-            if (gs.getActionAssignment(unit) != null) continue;
-
-            UnitAction ua = null;
-
-            if (unit.getType() == lightType || unit.getType() == heavyType
-                    || unit.getType() == rangedType) {
-                ua = heuristicMilitary(unit, enemies, gs, pgs);
-
-            } else if (unit.getType() == workerType) {
-                ua = heuristicWorker(unit, enemies, resources, base, gs, pgs);
-
-            } else if (unit.getType() == baseType) {
-                if (wc < 2 && gs.getPlayer(player).getResources() >= workerType.cost) {
-                    ua = bestTrain(unit, workerType, enemies, pgs);
-                }
-
-            } else if (unit.getType() == barracksType) {
-                if (gs.getPlayer(player).getResources() >= rangedType.cost) {
-                    ua = bestTrain(unit, rangedType, enemies, pgs);
-                } else if (gs.getPlayer(player).getResources() >= lightType.cost) {
-                    ua = bestTrain(unit, lightType, enemies, pgs);
-                }
-            }
-
-            if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
-                pa.addUnitAction(unit, ua);
-            }
-        }
-
-        return pa;
+        return vocab;
     }
 
-    private UnitAction heuristicMilitary(Unit unit, List<Unit> enemies,
+    private void addWorkerActions(ActionVocabulary vocab, Unit worker, String uid,
+                                   Unit myBase, List<Unit> enemies, List<Unit> resources,
+                                   GameState gs, PhysicalGameState pgs, int player) {
+        long wid = worker.getID();
+
+        // Harvest actions — one per nearby resource
+        if (myBase != null && !resources.isEmpty()) {
+            // If carrying resources → return to base
+            if (worker.getResources() > 0) {
+                UnitAction ua = pf.findPathToAdjacentPosition(worker,
+                        myBase.getX() + myBase.getY() * pgs.getWidth(), gs, null);
+                if (ua != null) {
+                    boolean adj = Math.abs(worker.getX()-myBase.getX())
+                                + Math.abs(worker.getY()-myBase.getY()) == 1;
+                    UnitAction actual = adj
+                            ? new UnitAction(UnitAction.TYPE_RETURN, ua.getDirection())
+                            : new UnitAction(UnitAction.TYPE_MOVE, ua.getDirection());
+                    if (gs.isUnitActionAllowed(worker, actual))
+                        vocab.add(new ActionEntry(uid,
+                                uid + "_return_resources_to_base", wid, actual));
+                }
+            } else {
+                // Harvest nearest 2 resources (give LLM choices)
+                resources.stream()
+                        .sorted(Comparator.comparingInt(r ->
+                                Math.abs(worker.getX()-r.getX()) + Math.abs(worker.getY()-r.getY())))
+                        .limit(2)
+                        .forEach(res -> {
+                            UnitAction ua = pf.findPathToAdjacentPosition(worker,
+                                    res.getX() + res.getY() * pgs.getWidth(), gs, null);
+                            if (ua != null) {
+                                boolean adj = Math.abs(worker.getX()-res.getX())
+                                            + Math.abs(worker.getY()-res.getY()) == 1;
+                                UnitAction actual = adj
+                                        ? new UnitAction(UnitAction.TYPE_HARVEST, ua.getDirection())
+                                        : new UnitAction(UnitAction.TYPE_MOVE, ua.getDirection());
+                                if (gs.isUnitActionAllowed(worker, actual))
+                                    vocab.add(new ActionEntry(uid,
+                                            uid + "_harvest_at_" + res.getX() + "_" + res.getY(),
+                                            wid, actual));
+                            }
+                        });
+            }
+        }
+
+        // Build barracks — ONE A* call only, to the single best adjacent tile
+        // Never scan a grid of positions — that was causing 25+ A* calls per worker
+        int myRes = gs.getPlayer(player).getResources();
+        if (myRes >= barracksType.cost) {
+            // Find one free adjacent tile — check 4 directions, no A* needed
+            for (int dir = 0; dir < 4; dir++) {
+                int bx = worker.getX() + UnitAction.DIRECTION_OFFSET_X[dir];
+                int by = worker.getY() + UnitAction.DIRECTION_OFFSET_Y[dir];
+                if (bx < 0 || by < 0 || bx >= pgs.getWidth() || by >= pgs.getHeight()) continue;
+                if (pgs.getTerrain(bx, by) != PhysicalGameState.TERRAIN_NONE) continue;
+                if (pgs.getUnitAt(bx, by) != null) continue;
+                // Worker is already adjacent — no A* needed at all
+                UnitAction actual = new UnitAction(UnitAction.TYPE_PRODUCE, dir, barracksType);
+                if (gs.isUnitActionAllowed(worker, actual)) {
+                    vocab.add(new ActionEntry(uid,
+                            uid + "_build_barracks_at_" + bx + "_" + by, wid, actual));
+                    break; // one build option is enough
+                }
+            }
+            // If not adjacent to any free tile, offer a move-toward-base action
+            // (worker needs to reposition first — one A* call)
+            if (!vocab.byUnitId.getOrDefault(uid, new ArrayList<>()).stream()
+                    .anyMatch(e -> e.actionId.contains("build"))) {
+                if (myBase != null) {
+                    UnitAction ua = pf.findPathToAdjacentPosition(worker,
+                            myBase.getX() + myBase.getY() * pgs.getWidth(), gs, null);
+                    if (ua != null) {
+                        UnitAction move = new UnitAction(UnitAction.TYPE_MOVE, ua.getDirection());
+                        if (gs.isUnitActionAllowed(worker, move))
+                            vocab.add(new ActionEntry(uid, uid + "_move_to_build_position",
+                                    wid, move));
+                    }
+                }
+            }
+        }
+
+        // Attack nearest enemy (workers can fight)
+        if (!enemies.isEmpty()) {
+            Unit target = nearestUnit(worker, enemies);
+            if (target != null) {
+                int d = dist(worker, target);
+                UnitAction ua;
+                if (d <= worker.getType().attackRange) {
+                    ua = new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
+                            target.getX() + target.getY() * pgs.getWidth());
+                } else {
+                    UnitAction move = pf.findPathToAdjacentPosition(worker,
+                            target.getX() + target.getY() * pgs.getWidth(), gs, null);
+                    ua = move != null ? new UnitAction(UnitAction.TYPE_MOVE, move.getDirection()) : null;
+                }
+                if (ua != null && gs.isUnitActionAllowed(worker, ua))
+                    vocab.add(new ActionEntry(uid,
+                            uid + "_attack_nearest_enemy_at_" + target.getX() + "_" + target.getY(),
+                            wid, ua));
+            }
+        }
+    }
+
+    private void addMilitaryActions(ActionVocabulary vocab, Unit unit, String uid,
+                                     List<Unit> enemies, GameState gs, PhysicalGameState pgs) {
+        if (enemies.isEmpty()) return;
+        long id = unit.getID();
+
+        // Find nearest enemy (no A* — just manhattan distance comparison)
+        // Offer 3 distinct target types to give LLM meaningful choices:
+        //   1. Nearest enemy (always)
+        //   2. Enemy base (if exists and not already nearest)
+        //   3. Enemy with lowest HP (focus-fire option)
+        Set<Long> addedTargets = new HashSet<>();
+
+        // 1. Nearest enemy — ONE A* call
+        Unit nearest = nearestUnit(unit, enemies);
+        if (nearest != null) {
+            UnitAction ua = buildAttackOrMove(unit, nearest, gs, pgs);
+            if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
+                String label = targetLabel(nearest);
+                vocab.add(new ActionEntry(uid, uid + "_" + label
+                        + "_at_" + nearest.getX() + "_" + nearest.getY(), id, ua));
+                addedTargets.add(nearest.getID());
+            }
+        }
+
+        // 2. Enemy base — ONE A* call (different target, more strategic)
+        enemies.stream()
+                .filter(e -> e.getType() == baseType && !addedTargets.contains(e.getID()))
+                .findFirst().ifPresent(base -> {
+                    UnitAction ua = buildAttackOrMove(unit, base, gs, pgs);
+                    if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
+                        vocab.add(new ActionEntry(uid, uid + "_attack_base"
+                                + "_at_" + base.getX() + "_" + base.getY(), id, ua));
+                        addedTargets.add(base.getID());
+                    }
+                });
+
+        // 3. Lowest HP enemy — ONE A* call (focus-fire option)
+        enemies.stream()
+                .filter(e -> !addedTargets.contains(e.getID()))
+                .min(Comparator.comparingInt(Unit::getHitPoints))
+                .ifPresent(weak -> {
+                    UnitAction ua = buildAttackOrMove(unit, weak, gs, pgs);
+                    if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
+                        vocab.add(new ActionEntry(uid, uid + "_focusfire_weakest"
+                                + "_at_" + weak.getX() + "_" + weak.getY(), id, ua));
+                    }
+                });
+    }
+
+    private UnitAction buildAttackOrMove(Unit unit, Unit target,
                                           GameState gs, PhysicalGameState pgs) {
-        if (enemies.isEmpty()) return null;
-        Unit target = nearestUnit(unit, enemies);
-        if (target == null) return null;
-
-        int dist = Math.abs(unit.getX() - target.getX())
-                 + Math.abs(unit.getY() - target.getY());
-
-        if (dist <= unit.getType().attackRange) {
+        int d = dist(unit, target);
+        if (d <= unit.getType().attackRange) {
             return new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
                     target.getX() + target.getY() * pgs.getWidth());
         }
-        return pf.findPathToAdjacentPosition(unit,
+        UnitAction move = pf.findPathToAdjacentPosition(unit,
                 target.getX() + target.getY() * pgs.getWidth(), gs, null);
+        return move != null ? new UnitAction(UnitAction.TYPE_MOVE, move.getDirection()) : null;
     }
 
-    private UnitAction heuristicWorker(Unit worker, List<Unit> enemies,
-                                        List<Unit> resources, Unit base,
-                                        GameState gs, PhysicalGameState pgs) {
-        // Return resources if carrying
-        if (worker.getResources() > 0 && base != null) {
-            int dist = Math.abs(worker.getX() - base.getX())
-                     + Math.abs(worker.getY() - base.getY());
-            if (dist == 1) {
-                return new UnitAction(UnitAction.TYPE_RETURN,
-                        dirTo(worker.getX(), worker.getY(), base.getX(), base.getY()));
-            }
-            return pf.findPathToAdjacentPosition(worker,
-                    base.getX() + base.getY() * pgs.getWidth(), gs, null);
-        }
-
-        // Harvest
-        if (!resources.isEmpty()) {
-            Unit res = nearestUnit(worker, resources);
-            if (res != null) {
-                int dist = Math.abs(worker.getX() - res.getX())
-                         + Math.abs(worker.getY() - res.getY());
-                if (dist == 1) {
-                    return new UnitAction(UnitAction.TYPE_HARVEST,
-                            dirTo(worker.getX(), worker.getY(), res.getX(), res.getY()));
-                }
-                return pf.findPathToAdjacentPosition(worker,
-                        res.getX() + res.getY() * pgs.getWidth(), gs, null);
-            }
-        }
-
-        // No resources — go fight
-        return heuristicMilitary(worker, enemies, gs, pgs);
+    private String targetLabel(Unit target) {
+        if (target.getType() == baseType)     return "attack_base";
+        if (target.getType().canHarvest)      return "attack_worker";
+        return "attack_" + target.getType().name.toLowerCase();
     }
 
-    private UnitAction bestTrain(Unit building, UnitType trainType,
-                                  List<Unit> enemies, PhysicalGameState pgs) {
-        int bestDir = UnitAction.DIRECTION_DOWN;
-        int bestScore = Integer.MIN_VALUE;
+    private void addBaseActions(ActionVocabulary vocab, Unit base, String uid,
+                                 int myRes, GameState gs, PhysicalGameState pgs) {
+        long id = base.getID();
+        if (myRes < workerType.cost) return;
 
         for (int dir = 0; dir < 4; dir++) {
-            int nx = building.getX() + UnitAction.DIRECTION_OFFSET_X[dir];
-            int ny = building.getY() + UnitAction.DIRECTION_OFFSET_Y[dir];
+            int nx = base.getX() + UnitAction.DIRECTION_OFFSET_X[dir];
+            int ny = base.getY() + UnitAction.DIRECTION_OFFSET_Y[dir];
             if (nx < 0 || ny < 0 || nx >= pgs.getWidth() || ny >= pgs.getHeight()) continue;
             if (pgs.getUnitAt(nx, ny) != null) continue;
-            if (pgs.getTerrain(nx, ny) != PhysicalGameState.TERRAIN_NONE) continue;
-
-            int score = 0;
-            if (!enemies.isEmpty()) {
-                Unit nearest = nearestUnit(nx, ny, enemies);
-                if (nearest != null) {
-                    score = -(Math.abs(nx - nearest.getX()) + Math.abs(ny - nearest.getY()));
-                }
+            UnitAction ua = new UnitAction(UnitAction.TYPE_PRODUCE, dir, workerType);
+            if (gs.isUnitActionAllowed(base, ua)) {
+                vocab.add(new ActionEntry(uid, uid + "_train_worker", id, ua));
+                break; // one train action per base
             }
-            if (score > bestScore) { bestScore = score; bestDir = dir; }
         }
-        return new UnitAction(UnitAction.TYPE_PRODUCE, bestDir, trainType);
+    }
+
+    private void addBarracksActions(ActionVocabulary vocab, Unit barrack, String uid,
+                                     int myRes, GameState gs, PhysicalGameState pgs,
+                                     List<Unit> enemies) {
+        long id = barrack.getID();
+
+        // Find best spawn direction (toward nearest enemy)
+        int bestDir = findBestSpawnDir(barrack, pgs, enemies);
+
+        // Offer affordable units
+        if (myRes >= rangedType.cost) {
+            UnitAction ua = new UnitAction(UnitAction.TYPE_PRODUCE, bestDir, rangedType);
+            if (gs.isUnitActionAllowed(barrack, ua))
+                vocab.add(new ActionEntry(uid, uid + "_train_ranged", id, ua));
+        }
+        if (myRes >= lightType.cost) {
+            UnitAction ua = new UnitAction(UnitAction.TYPE_PRODUCE, bestDir, lightType);
+            if (gs.isUnitActionAllowed(barrack, ua))
+                vocab.add(new ActionEntry(uid, uid + "_train_light", id, ua));
+        }
+        if (myRes >= heavyType.cost) {
+            UnitAction ua = new UnitAction(UnitAction.TYPE_PRODUCE, bestDir, heavyType);
+            if (gs.isUnitActionAllowed(barrack, ua))
+                vocab.add(new ActionEntry(uid, uid + "_train_heavy", id, ua));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  L2 LLM CALL — multi-frame synthesis + action extraction
+    //
+    //  Equivalent to SC2's L2 (multi-frame) summarization + action extractor.
+    //  Receives K L1 summaries, outputs assignments from vocabulary.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private Map<Long, UnitAction> callL2LLM(String frameHistory,
+                                              ActionVocabulary vocab,
+                                              int player) {
+        // Build L2 prompt: frame history + available action vocabulary
+        String userPrompt = buildL2Prompt(frameHistory, vocab);
+        String response   = callLLMRaw(userPrompt);
+
+        // Action extractor: parse LLM assignments, map to UnitActions via vocab
+        return extractActions(response, vocab);
+    }
+
+    private String buildL2Prompt(String frameHistory, ActionVocabulary vocab) {
+        return L2_SYSTEM_PROMPT
+            + "\n=== RECENT GAME FRAMES (newest last) ===\n"
+            + frameHistory
+            + "\n\n=== AVAILABLE ACTIONS ===\n"
+            + vocab.format()
+            + "\nAssign actions to units. Use exact action IDs from the list above.";
+    }
+
+    private String buildFrameHistory() {
+        StringBuilder sb = new StringBuilder();
+        int i = 1;
+        for (String frame : frameQueue) {
+            sb.append("Frame ").append(i++).append(": ").append(frame).append("\n");
+        }
+        return sb.toString();
+    }
+
+    // ── Action Extractor ───────────────────────────────────────────────────────
+
+    /**
+     * Parse LLM response and map action IDs back to actual UnitActions.
+     * This is the "action extractor" component from SC2 CoS.
+     * Any action ID not in the vocabulary is silently dropped — no hallucinations.
+     */
+    private Map<Long, UnitAction> extractActions(String response, ActionVocabulary vocab) {
+        Map<Long, UnitAction> result = new HashMap<>();
+
+        try {
+            response = response.replaceAll("(?s)<think>.*?</think>", "").trim();
+            int s = response.indexOf("{"), e = response.lastIndexOf("}") + 1;
+            if (s >= 0 && e > s) response = response.substring(s, e);
+
+            JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+
+            if (json.has("analysis"))
+                System.out.println("[yebot] Analysis: " + json.get("analysis").getAsString());
+            if (json.has("strategy"))
+                System.out.println("[yebot] Strategy: " + json.get("strategy").getAsString());
+
+            JsonArray assignments = json.getAsJsonArray("assignments");
+            if (assignments == null) return result;
+
+            Set<String> usedUnits = new HashSet<>();
+
+            for (JsonElement el : assignments) {
+                if (!el.isJsonObject()) continue;
+                JsonObject assignment = el.getAsJsonObject();
+
+                String unitId   = assignment.has("unit_id")   ? assignment.get("unit_id").getAsString()   : null;
+                String actionId = assignment.has("action_id") ? assignment.get("action_id").getAsString() : null;
+
+                if (unitId == null || actionId == null) continue;
+                if (usedUnits.contains(unitId)) continue; // one action per unit
+
+                // Look up in vocabulary — if not found, silently skip (no hallucinations)
+                ActionEntry entry = vocab.byActionId.get(actionId);
+                if (entry == null) {
+                    System.out.println("[yebot] Unknown action ID: " + actionId + " (skipped)");
+                    continue;
+                }
+
+                result.put(entry.unitUID, entry.action);
+                usedUnits.add(unitId);
+            }
+
+        } catch (Exception ex) {
+            System.err.println("[yebot] Extraction error: " + ex.getMessage());
+        }
+
+        return result;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  LLM HTTP CALL
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private String callLLMRaw(String fullPrompt) {
+        try {
+            URL url = new URL(API_URL);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(LLM_TIMEOUT);
+            conn.setReadTimeout(LLM_TIMEOUT);
+
+            JsonObject req = new JsonObject();
+            req.addProperty("model", OLLAMA_MODEL);
+
+            JsonArray msgs = new JsonArray();
+            JsonObject usr = new JsonObject();
+            usr.addProperty("role", "user");
+            usr.addProperty("content", fullPrompt);
+            msgs.add(usr);
+            req.add("messages", msgs);
+
+            JsonObject fmt = new JsonObject();
+            fmt.addProperty("type", "json_object");
+            req.add("response_format", fmt);
+            req.addProperty("temperature", 0.2);
+            req.addProperty("max_tokens", 512);
+
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(req.toString().getBytes(StandardCharsets.UTF_8));
+            }
+
+            if (conn.getResponseCode() == 200) {
+                try (BufferedReader br = new BufferedReader(
+                        new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) sb.append(line);
+                    JsonObject resp = JsonParser.parseString(sb.toString()).getAsJsonObject();
+                    JsonArray choices = resp.getAsJsonArray("choices");
+                    if (choices != null && choices.size() > 0) {
+                        return choices.get(0).getAsJsonObject()
+                                .getAsJsonObject("message")
+                                .get("content").getAsString();
+                    }
+                }
+            } else {
+                System.err.println("[yebot] API error " + conn.getResponseCode());
+            }
+        } catch (Exception e) {
+            System.err.println("[yebot] HTTP error: " + e.getMessage());
+        }
+        return "{\"analysis\":\"\",\"strategy\":\"\",\"assignments\":[]}";
     }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  UTILITIES
     // ══════════════════════════════════════════════════════════════════════════
 
-    private int findBestSpawnDir(Unit building, PhysicalGameState pgs,
-                                   List<Unit> threats) {
+    private int findBestSpawnDir(Unit building, PhysicalGameState pgs, List<Unit> enemies) {
         int bestDir = UnitAction.DIRECTION_DOWN;
         int bestScore = Integer.MIN_VALUE;
-
         for (int dir = 0; dir < 4; dir++) {
             int nx = building.getX() + UnitAction.DIRECTION_OFFSET_X[dir];
             int ny = building.getY() + UnitAction.DIRECTION_OFFSET_Y[dir];
             if (nx < 0 || ny < 0 || nx >= pgs.getWidth() || ny >= pgs.getHeight()) continue;
             if (pgs.getUnitAt(nx, ny) != null) continue;
             if (pgs.getTerrain(nx, ny) != PhysicalGameState.TERRAIN_NONE) continue;
-
             int score = 0;
-            if (!threats.isEmpty()) {
-                int minDist = Integer.MAX_VALUE;
-                for (Unit t : threats) {
-                    int d = Math.abs(nx - t.getX()) + Math.abs(ny - t.getY());
-                    minDist = Math.min(minDist, d);
-                }
-                score = -minDist;
+            if (!enemies.isEmpty()) {
+                Unit nearest = nearestUnit(nx, ny, enemies);
+                if (nearest != null)
+                    score = -(Math.abs(nx - nearest.getX()) + Math.abs(ny - nearest.getY()));
             }
             if (score > bestScore) { bestScore = score; bestDir = dir; }
         }
         return bestDir;
+    }
+
+    private int dist(Unit a, Unit b) {
+        return Math.abs(a.getX()-b.getX()) + Math.abs(a.getY()-b.getY());
     }
 
     private Unit nearestUnit(Unit src, List<Unit> units) {
@@ -460,22 +788,12 @@ public class yebot extends AbstractionLayerAI {
     }
 
     private Unit nearestUnit(int x, int y, List<Unit> units) {
-        Unit best = null;
-        int bestDist = Integer.MAX_VALUE;
+        Unit best = null; int bestD = Integer.MAX_VALUE;
         for (Unit u : units) {
-            int dist = Math.abs(x - u.getX()) + Math.abs(y - u.getY());
-            if (dist < bestDist) { bestDist = dist; best = u; }
+            int d = Math.abs(x-u.getX()) + Math.abs(y-u.getY());
+            if (d < bestD) { bestD = d; best = u; }
         }
         return best;
-    }
-
-    private int dirTo(int fx, int fy, int tx, int ty) {
-        int dx = tx - fx, dy = ty - fy;
-        if (Math.abs(dx) >= Math.abs(dy)) {
-            return dx > 0 ? UnitAction.DIRECTION_RIGHT : UnitAction.DIRECTION_LEFT;
-        } else {
-            return dy > 0 ? UnitAction.DIRECTION_DOWN : UnitAction.DIRECTION_UP;
-        }
     }
 
     @Override
