@@ -61,7 +61,7 @@ public class yebot extends AbstractionLayerAI {
             ? System.getenv("OLLAMA_MODEL") : "llama4:latest";
     private static final String API_URL = System.getenv("OLLAMA_URL") != null
             ? System.getenv("OLLAMA_URL") : "http://localhost:11434/v1/chat/completions";
-    private static final int LLM_TIMEOUT  = 20000;
+    private static final int LLM_TIMEOUT  = 60000; // 60s — llama4 can be slow on shared hardware
 
     // ─── CoS Config ───────────────────────────────────────────────────────────
     private static final int FRAME_QUEUE_SIZE = 8;  // K: more history = richer L2 context
@@ -186,9 +186,19 @@ Assign at most one action per unit. Unassigned units will idle.
                         actionQueue = result;
                         System.out.println("[yebot] Opening set t=" + t0
                                 + " (" + result.size() + " units)");
+                    } else {
+                        // LLM returned nothing — use vocab's first action per unit as fallback
+                        // This ensures units NEVER permanently idle even if LLM fails/times out
+                        Map<Long, UnitAction> fallback = buildFallbackActions(ovc);
+                        if (!fallback.isEmpty()) {
+                            actionQueue = fallback;
+                            System.out.println("[yebot] Opening fallback used t=" + t0);
+                        }
                     }
                 } catch (Exception e) {
                     System.err.println("[yebot] Opening err: " + e.getMessage());
+                    Map<Long, UnitAction> fallback = buildFallbackActions(ovc);
+                    if (!fallback.isEmpty()) actionQueue = fallback;
                 } finally {
                     llmRunning = false;
                 }
@@ -216,9 +226,17 @@ Assign at most one action per unit. Unassigned units will idle.
                         actionQueue = result;
                         System.out.println("[yebot] Queue updated at t=" + tickCopy
                                 + " (" + result.size() + " assignments)");
+                    } else {
+                        Map<Long, UnitAction> fallback = buildFallbackActions(vocabCopy);
+                        if (!fallback.isEmpty()) {
+                            actionQueue = fallback;
+                            System.out.println("[yebot] L2 fallback used t=" + tickCopy);
+                        }
                     }
                 } catch (Exception e) {
                     System.err.println("[yebot] L2 error: " + e.getMessage());
+                    Map<Long, UnitAction> fallback = buildFallbackActions(vocabCopy);
+                    if (!fallback.isEmpty()) actionQueue = fallback;
                 } finally {
                     llmRunning = false;
                 }
@@ -649,55 +667,83 @@ Assign at most one action per unit. Unassigned units will idle.
         return extractActions(response, vocab);
     }
 
+    /**
+     * Emergency fallback: if LLM fails or times out, pick the best action
+     * per unit from the vocabulary using simple priority rules.
+     * Ensures units never permanently idle regardless of LLM health.
+     * Priority: attack > harvest > train_worker > train_ranged > move > anything
+     */
+    private Map<Long, UnitAction> buildFallbackActions(ActionVocabulary vocab) {
+        Map<Long, UnitAction> result = new HashMap<>();
+        for (Map.Entry<String, List<ActionEntry>> entry : vocab.byUnitId.entrySet()) {
+            List<ActionEntry> actions = entry.getValue();
+            if (actions.isEmpty()) continue;
+
+            // Pick highest-priority action
+            ActionEntry best = null;
+            int bestPriority = -1;
+            for (ActionEntry ae : actions) {
+                int pri = actionPriority(ae.actionId);
+                if (pri > bestPriority) { bestPriority = pri; best = ae; }
+            }
+            if (best != null) result.put(best.unitUID, best.action);
+        }
+        return result;
+    }
+
+    private int actionPriority(String actionId) {
+        if (actionId.contains("attack"))        return 100;
+        if (actionId.contains("harvest"))       return 90;
+        if (actionId.contains("return"))        return 85;
+        if (actionId.contains("train_worker"))  return 80;
+        if (actionId.contains("train_ranged"))  return 75;
+        if (actionId.contains("train_light"))   return 70;
+        if (actionId.contains("train_heavy"))   return 65;
+        if (actionId.contains("build"))         return 60;
+        if (actionId.contains("move"))          return 50;
+        return 10;
+    }
+
     private Map<Long, UnitAction> callOpeningRushLLM(ActionVocabulary vocab) {
         return extractActions(callLLMRaw(buildOpeningRushPrompt(vocab)), vocab);
     }
 
     private String buildOpeningRushPrompt(ActionVocabulary vocab) {
+        // Build a compact, clearly structured prompt using real newlines.
+        // Key design: annotate each action with its intended role so the
+        // LLM just reads the hint and assigns — no reasoning required.
         StringBuilder sb = new StringBuilder();
-        sb.append("You are executing a WORKER RUSH opening in MicroRTS (tick 0-200).\n");
-        sb.append("Assign actions to ALL units using ONLY the exact action IDs below.\n\n");
-        sb.append("=== RUSH ASSIGNMENT RULES ===\n");
-        sb.append("BASE units  -> assign train_worker (keep producing workers)\n");
-        sb.append("WORKER-0    -> assign its harvest action (ONE harvester only)\n");
-        sb.append("WORKER-1+   -> assign attack action to rush enemy (NOT harvest)\n");
-        sb.append("MILITARY    -> assign attack action toward nearest enemy\n");
-        sb.append("BARRACKS    -> assign train_ranged if available\n\n");
-        sb.append("=== STRATEGY EXPLANATION ===\n");
-        sb.append("Workers deal 1 damage each. More attacking workers = more DPS.\n");
-        sb.append("One harvester keeps the base training new workers every tick.\n");
-        sb.append("New workers should attack immediately, not harvest.\n\n");
-        sb.append("=== AVAILABLE ACTIONS ===\n");
+        sb.append("WORKER RUSH OPENING — assign all units now.\n");
+        sb.append("Use ONLY the exact action IDs listed. Copy them character-for-character.\n\n");
+        sb.append("RULES:\n");
+        sb.append("- BASE0: assign train_worker\n");
+        sb.append("- W0: assign its harvest action (only one harvester)\n");
+        sb.append("- W1, W2, ...: assign their attack action (rush enemy base)\n");
+        sb.append("- MILITARY: assign attack action\n");
+        sb.append("- BARRACKS: assign train_ranged\n\n");
+        sb.append("AVAILABLE ACTIONS:\n");
 
-        int workerCount = 0;
         for (Map.Entry<String, List<ActionEntry>> e : vocab.byUnitId.entrySet()) {
             String uid = e.getKey();
-            sb.append("Unit ").append(uid).append(":\n");
-            boolean isWorker = uid.startsWith("W");
             boolean isFirstWorker = uid.equals("W0");
+            boolean isOtherWorker = uid.startsWith("W") && !isFirstWorker;
+            sb.append(uid).append(":\n");
             for (ActionEntry ae : e.getValue()) {
-                String hint = "";
-                if (ae.actionId.contains("train_worker"))      hint = "  <-- ASSIGN THIS for base";
-                else if (ae.actionId.contains("harvest") && isFirstWorker)
-                                                               hint = "  <-- ASSIGN THIS for W0 only";
-                else if (ae.actionId.contains("attack") && isWorker && !isFirstWorker)
-                                                               hint = "  <-- ASSIGN THIS to rush enemy";
-                else if (ae.actionId.contains("train_ranged")) hint = "  <-- assign for barracks";
-                else if (ae.actionId.contains("return"))       hint = "  <-- only if carrying";
-                sb.append("  ").append(ae.actionId).append(hint).append("\n");
+                String tag = "";
+                if (ae.actionId.contains("train_worker"))       tag = " [USE THIS]";
+                else if (ae.actionId.contains("harvest") && isFirstWorker) tag = " [USE THIS]";
+                else if (ae.actionId.contains("attack") && isOtherWorker)  tag = " [USE THIS]";
+                else if (ae.actionId.contains("train_ranged"))  tag = " [USE THIS]";
+                sb.append("  ").append(ae.actionId).append(tag).append("\n");
             }
         }
 
-        sb.append("\n=== OUTPUT FORMAT (JSON only) ===\n");
-        sb.append("{\n");
-        sb.append("  \"analysis\": \"Worker rush opening: one harvests, rest attack\",\n");
-        sb.append("  \"strategy\": \"Flood enemy base with workers now\",\n");
-        sb.append("  \"assignments\": [\n");
-        sb.append("    {\"unit_id\": \"BASE0\", \"action_id\": \"BASE0_train_worker\"},\n");
-        sb.append("    {\"unit_id\": \"W0\", \"action_id\": \"W0_harvest_at_X_Y\"},\n");
-        sb.append("    {\"unit_id\": \"W1\", \"action_id\": \"W1_attack_nearest_enemy_at_X_Y\"}\n");
-        sb.append("  ]\n}\n");
-        sb.append("Replace X_Y with actual coordinates from IDs above. Copy IDs exactly.\n");
+        sb.append("\nOUTPUT JSON ONLY:\n");
+        sb.append("{\"analysis\":\"rush\",\"strategy\":\"attack\",\"assignments\":[");
+        sb.append("{\"unit_id\":\"BASE0\",\"action_id\":\"BASE0_train_worker\"},");
+        sb.append("{\"unit_id\":\"W0\",\"action_id\":\"W0_harvest_at_X_Y\"},");
+        sb.append("{\"unit_id\":\"W1\",\"action_id\":\"W1_attack_nearest_enemy_at_X_Y\"}]}\n");
+        sb.append("Replace X_Y with real coords from the action IDs above.\n");
         return sb.toString();
     }
 
