@@ -217,12 +217,37 @@
         return '';
     }
 
+    function renderMapScoresSection(mapScores) {
+        if (!mapScores || typeof mapScores !== 'object') return '';
+        var labels = Object.keys(mapScores);
+        if (labels.length === 0) return '';
+
+        var html = '<div class="map-scores-section">';
+        html += '<h5>Per-Map Scores</h5>';
+        html += '<div class="map-score-chips">';
+        for (var i = 0; i < labels.length; i++) {
+            var ml = labels[i];
+            var ms = mapScores[ml];
+            var score = ms.score != null ? ms.score : '?';
+            var grade = ms.grade || '';
+            var elim = ms.eliminated_at;
+            var elimText = elim ? ' (elim: ' + escapeHtml(elim) + ')' : '';
+            html += '<span class="map-score-chip">' + escapeHtml(ml) + ': <strong>' + score + '</strong> ' + gradeBadge(grade) + elimText + '</span>';
+        }
+        html += '</div></div>';
+        return html;
+    }
+
     function renderDetailPanel(entry) {
         var opponents = entry.opponents || {};
         var agentClass = guessAgentClass(entry);
         var map = entry.map || 'maps/8x8/basesWorkers8x8.xml';
         var html = '<div class="detail-panel">';
         html += '<h4>Games for ' + escapeHtml(entry.display_name) + '</h4>';
+
+        // Show per-map scores if available
+        html += renderMapScoresSection(entry.map_scores);
+
         html += '<div class="game-cards">';
 
         for (var i = 0; i < ANCHORS.length; i++) {
