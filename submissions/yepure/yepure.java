@@ -1,5 +1,5 @@
 /*
- * yepure — PureLLM with Chain of Summarization (CoS)
+ * yebot — PureLLM with Chain of Summarization (CoS)
  *
  * Inspired by TextStarCraft II (NeurIPS 2024) Chain of Summarization method.
  * Adapted for MicroRTS's faster pace and simpler action space.
@@ -34,9 +34,9 @@
  * The rule layer only ensures the HOW is physically possible.
  *
  * @author Ye
- * Team: yepure
+ * Team: yebot
  */
-package ai.abstraction.submissions.yepure;
+package ai.abstraction.submissions.yebot;
 
 import ai.abstraction.AbstractionLayerAI;
 import ai.abstraction.pathfinding.AStarPathFinding;
@@ -52,8 +52,9 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.*;
 
-public class yepure extends AbstractionLayerAI {
+public class yebot extends AbstractionLayerAI {
 
     // ─── API Config ────────────────────────────────────────────────────────────
     private static final String OLLAMA_MODEL = System.getenv("OLLAMA_MODEL") != null
@@ -121,11 +122,11 @@ Assign at most one action per unit. Unassigned units will idle.
     //  CONSTRUCTORS / RESET
     // ══════════════════════════════════════════════════════════════════════════
 
-    public yepure(UnitTypeTable a_utt) {
+    public yebot(UnitTypeTable a_utt) {
         this(a_utt, new AStarPathFinding());
     }
 
-    public yepure(UnitTypeTable a_utt, PathFinding a_pf) {
+    public yebot(UnitTypeTable a_utt, PathFinding a_pf) {
         super(a_pf);
         reset(a_utt);
     }
@@ -151,7 +152,7 @@ Assign at most one action per unit. Unassigned units will idle.
     }
 
     @Override
-    public AI clone() { return new yepure(utt, pf); }
+    public AI clone() { return new yebot(utt, pf); }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  MAIN ENTRY POINT
@@ -169,14 +170,14 @@ Assign at most one action per unit. Unassigned units will idle.
         frameQueue.addLast(l1);
         while (frameQueue.size() > FRAME_QUEUE_SIZE) frameQueue.pollFirst();
 
-        // ── Build action vocabulary (pre-validated, this tick's legal moves) ──
-        // This is what makes CoS different: LLM only picks from this list
-        ActionVocabulary vocab = buildActionVocabulary(player, gs, pgs);
+        // ── Build action vocabulary only when about to call LLM ─────────────
+        // Vocab building runs A* per unit — only do this work when needed.
+        // Between LLM calls, just apply the cached actionQueue.
+        boolean needVocab = !llmRunning && tick - lastLLMTick >= LLM_INTERVAL;
+        ActionVocabulary vocab = needVocab ? buildActionVocabulary(player, gs, pgs) : null;
 
         // ── Fire async L2 if interval elapsed and vocab is non-empty ──────────
-        if (!llmRunning
-                && tick - lastLLMTick >= LLM_INTERVAL
-                && !vocab.isEmpty()) {
+        if (needVocab && vocab != null && !vocab.isEmpty()) {
             lastLLMTick = tick;
             llmRunning  = true;
             final String frameHistory = buildFrameHistory();
@@ -192,7 +193,7 @@ Assign at most one action per unit. Unassigned units will idle.
                         actionQueueExpiry = tickCopy + ACTION_QUEUE_TTL;
                     }
                 } catch (Exception e) {
-                    System.err.println("[yepure] L2 error: " + e.getMessage());
+                    System.err.println("[yebot] L2 error: " + e.getMessage());
                 } finally {
                     llmRunning = false;
                 }
@@ -437,34 +438,38 @@ Assign at most one action per unit. Unassigned units will idle.
             }
         }
 
-        // Build barracks — find best adjacent positions
+        // Build barracks — ONE A* call only, to the single best adjacent tile
+        // Never scan a grid of positions — that was causing 25+ A* calls per worker
         int myRes = gs.getPlayer(player).getResources();
         if (myRes >= barracksType.cost) {
-            for (int dx = -2; dx <= 2; dx++) {
-                for (int dy = -2; dy <= 2; dy++) {
-                    int bx = worker.getX() + dx, by = worker.getY() + dy;
-                    if (bx < 0 || by < 0 || bx >= pgs.getWidth() || by >= pgs.getHeight()) continue;
-                    if (pgs.getTerrain(bx, by) != PhysicalGameState.TERRAIN_NONE) continue;
-                    if (pgs.getUnitAt(bx, by) != null) continue;
-
+            // Find one free adjacent tile — check 4 directions, no A* needed
+            for (int dir = 0; dir < 4; dir++) {
+                int bx = worker.getX() + UnitAction.DIRECTION_OFFSET_X[dir];
+                int by = worker.getY() + UnitAction.DIRECTION_OFFSET_Y[dir];
+                if (bx < 0 || by < 0 || bx >= pgs.getWidth() || by >= pgs.getHeight()) continue;
+                if (pgs.getTerrain(bx, by) != PhysicalGameState.TERRAIN_NONE) continue;
+                if (pgs.getUnitAt(bx, by) != null) continue;
+                // Worker is already adjacent — no A* needed at all
+                UnitAction actual = new UnitAction(UnitAction.TYPE_PRODUCE, dir, barracksType);
+                if (gs.isUnitActionAllowed(worker, actual)) {
+                    vocab.add(new ActionEntry(uid,
+                            uid + "_build_barracks_at_" + bx + "_" + by, wid, actual));
+                    break; // one build option is enough
+                }
+            }
+            // If not adjacent to any free tile, offer a move-toward-base action
+            // (worker needs to reposition first — one A* call)
+            if (!vocab.byUnitId.getOrDefault(uid, new ArrayList<>()).stream()
+                    .anyMatch(e -> e.actionId.contains("build"))) {
+                if (myBase != null) {
                     UnitAction ua = pf.findPathToAdjacentPosition(worker,
-                            bx + by * pgs.getWidth(), gs, null);
+                            myBase.getX() + myBase.getY() * pgs.getWidth(), gs, null);
                     if (ua != null) {
-                        boolean adj = Math.abs(worker.getX()-bx)
-                                    + Math.abs(worker.getY()-by) == 1;
-                        UnitAction actual = adj
-                                ? new UnitAction(UnitAction.TYPE_PRODUCE, ua.getDirection(), barracksType)
-                                : new UnitAction(UnitAction.TYPE_MOVE, ua.getDirection());
-                        if (gs.isUnitActionAllowed(worker, actual)) {
-                            vocab.add(new ActionEntry(uid,
-                                    uid + "_build_barracks_near_" + bx + "_" + by,
-                                    wid, actual));
-                            break; // one build option per worker is enough
-                        }
+                        UnitAction move = new UnitAction(UnitAction.TYPE_MOVE, ua.getDirection());
+                        if (gs.isUnitActionAllowed(worker, move))
+                            vocab.add(new ActionEntry(uid, uid + "_move_to_build_position",
+                                    wid, move));
                     }
-                    if (!vocab.byUnitId.getOrDefault(uid, List.of()).stream()
-                            .anyMatch(e -> e.actionId.contains("build"))) continue;
-                    break;
                 }
             }
         }
@@ -496,32 +501,66 @@ Assign at most one action per unit. Unassigned units will idle.
         if (enemies.isEmpty()) return;
         long id = unit.getID();
 
-        // Offer attack/move actions for each enemy, prioritized by distance
+        // Find nearest enemy (no A* — just manhattan distance comparison)
+        // Offer 3 distinct target types to give LLM meaningful choices:
+        //   1. Nearest enemy (always)
+        //   2. Enemy base (if exists and not already nearest)
+        //   3. Enemy with lowest HP (focus-fire option)
+        Set<Long> addedTargets = new HashSet<>();
+
+        // 1. Nearest enemy — ONE A* call
+        Unit nearest = nearestUnit(unit, enemies);
+        if (nearest != null) {
+            UnitAction ua = buildAttackOrMove(unit, nearest, gs, pgs);
+            if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
+                String label = targetLabel(nearest);
+                vocab.add(new ActionEntry(uid, uid + "_" + label
+                        + "_at_" + nearest.getX() + "_" + nearest.getY(), id, ua));
+                addedTargets.add(nearest.getID());
+            }
+        }
+
+        // 2. Enemy base — ONE A* call (different target, more strategic)
         enemies.stream()
-                .sorted(Comparator.comparingInt(e -> dist(unit, e)))
-                .limit(3) // top 3 closest enemies — give LLM reasonable choices
-                .forEach(target -> {
-                    int d = dist(unit, target);
-                    UnitAction ua;
-                    if (d <= unit.getType().attackRange) {
-                        ua = new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
-                                target.getX() + target.getY() * pgs.getWidth());
-                    } else {
-                        UnitAction move = pf.findPathToAdjacentPosition(unit,
-                                target.getX() + target.getY() * pgs.getWidth(), gs, null);
-                        ua = move != null
-                                ? new UnitAction(UnitAction.TYPE_MOVE, move.getDirection())
-                                : null;
-                    }
+                .filter(e -> e.getType() == baseType && !addedTargets.contains(e.getID()))
+                .findFirst().ifPresent(base -> {
+                    UnitAction ua = buildAttackOrMove(unit, base, gs, pgs);
                     if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
-                        String label = target.getType() == baseType ? "attack_base"
-                                : target.getType().canHarvest ? "attack_worker"
-                                : "attack_" + target.getType().name.toLowerCase();
-                        vocab.add(new ActionEntry(uid,
-                                uid + "_" + label + "_at_" + target.getX() + "_" + target.getY(),
-                                id, ua));
+                        vocab.add(new ActionEntry(uid, uid + "_attack_base"
+                                + "_at_" + base.getX() + "_" + base.getY(), id, ua));
+                        addedTargets.add(base.getID());
                     }
                 });
+
+        // 3. Lowest HP enemy — ONE A* call (focus-fire option)
+        enemies.stream()
+                .filter(e -> !addedTargets.contains(e.getID()))
+                .min(Comparator.comparingInt(Unit::getHitPoints))
+                .ifPresent(weak -> {
+                    UnitAction ua = buildAttackOrMove(unit, weak, gs, pgs);
+                    if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
+                        vocab.add(new ActionEntry(uid, uid + "_focusfire_weakest"
+                                + "_at_" + weak.getX() + "_" + weak.getY(), id, ua));
+                    }
+                });
+    }
+
+    private UnitAction buildAttackOrMove(Unit unit, Unit target,
+                                          GameState gs, PhysicalGameState pgs) {
+        int d = dist(unit, target);
+        if (d <= unit.getType().attackRange) {
+            return new UnitAction(UnitAction.TYPE_ATTACK_LOCATION,
+                    target.getX() + target.getY() * pgs.getWidth());
+        }
+        UnitAction move = pf.findPathToAdjacentPosition(unit,
+                target.getX() + target.getY() * pgs.getWidth(), gs, null);
+        return move != null ? new UnitAction(UnitAction.TYPE_MOVE, move.getDirection()) : null;
+    }
+
+    private String targetLabel(Unit target) {
+        if (target.getType() == baseType)     return "attack_base";
+        if (target.getType().canHarvest)      return "attack_worker";
+        return "attack_" + target.getType().name.toLowerCase();
     }
 
     private void addBaseActions(ActionVocabulary vocab, Unit base, String uid,
@@ -622,9 +661,9 @@ Assign at most one action per unit. Unassigned units will idle.
             JsonObject json = JsonParser.parseString(response).getAsJsonObject();
 
             if (json.has("analysis"))
-                System.out.println("[yepure] Analysis: " + json.get("analysis").getAsString());
+                System.out.println("[yebot] Analysis: " + json.get("analysis").getAsString());
             if (json.has("strategy"))
-                System.out.println("[yepure] Strategy: " + json.get("strategy").getAsString());
+                System.out.println("[yebot] Strategy: " + json.get("strategy").getAsString());
 
             JsonArray assignments = json.getAsJsonArray("assignments");
             if (assignments == null) return result;
@@ -644,7 +683,7 @@ Assign at most one action per unit. Unassigned units will idle.
                 // Look up in vocabulary — if not found, silently skip (no hallucinations)
                 ActionEntry entry = vocab.byActionId.get(actionId);
                 if (entry == null) {
-                    System.out.println("[yepure] Unknown action ID: " + actionId + " (skipped)");
+                    System.out.println("[yebot] Unknown action ID: " + actionId + " (skipped)");
                     continue;
                 }
 
@@ -653,7 +692,7 @@ Assign at most one action per unit. Unassigned units will idle.
             }
 
         } catch (Exception ex) {
-            System.err.println("[yepure] Extraction error: " + ex.getMessage());
+            System.err.println("[yebot] Extraction error: " + ex.getMessage());
         }
 
         return result;
@@ -708,10 +747,10 @@ Assign at most one action per unit. Unassigned units will idle.
                     }
                 }
             } else {
-                System.err.println("[yepure] API error " + conn.getResponseCode());
+                System.err.println("[yebot] API error " + conn.getResponseCode());
             }
         } catch (Exception e) {
-            System.err.println("[yepure] HTTP error: " + e.getMessage());
+            System.err.println("[yebot] HTTP error: " + e.getMessage());
         }
         return "{\"analysis\":\"\",\"strategy\":\"\",\"assignments\":[]}";
     }
