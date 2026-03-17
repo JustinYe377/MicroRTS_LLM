@@ -1,5 +1,5 @@
 /*
- * yebot — PureLLM with Chain of Summarization (CoS)
+ * yepure — PureLLM with Chain of Summarization (CoS)
  *
  * Inspired by TextStarCraft II (NeurIPS 2024) Chain of Summarization method.
  * Adapted for MicroRTS's faster pace and simpler action space.
@@ -34,9 +34,9 @@
  * The rule layer only ensures the HOW is physically possible.
  *
  * @author Ye
- * Team: yebot
+ * Team: yepure
  */
-package ai.abstraction.submissions.yebot;
+package ai.abstraction.submissions.yepure;
 
 import ai.abstraction.AbstractionLayerAI;
 import ai.abstraction.pathfinding.AStarPathFinding;
@@ -54,7 +54,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.*;
 
-public class yebot extends AbstractionLayerAI {
+public class yepure extends AbstractionLayerAI {
 
     // ─── API Config ────────────────────────────────────────────────────────────
     private static final String OLLAMA_MODEL = System.getenv("OLLAMA_MODEL") != null
@@ -122,11 +122,11 @@ Assign at most one action per unit. Unassigned units will idle.
     //  CONSTRUCTORS / RESET
     // ══════════════════════════════════════════════════════════════════════════
 
-    public yebot(UnitTypeTable a_utt) {
+    public yepure(UnitTypeTable a_utt) {
         this(a_utt, new AStarPathFinding());
     }
 
-    public yebot(UnitTypeTable a_utt, PathFinding a_pf) {
+    public yepure(UnitTypeTable a_utt, PathFinding a_pf) {
         super(a_pf);
         reset(a_utt);
     }
@@ -152,7 +152,7 @@ Assign at most one action per unit. Unassigned units will idle.
     }
 
     @Override
-    public AI clone() { return new yebot(utt, pf); }
+    public AI clone() { return new yepure(utt, pf); }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  MAIN ENTRY POINT
@@ -193,7 +193,7 @@ Assign at most one action per unit. Unassigned units will idle.
                         actionQueueExpiry = tickCopy + ACTION_QUEUE_TTL;
                     }
                 } catch (Exception e) {
-                    System.err.println("[yebot] L2 error: " + e.getMessage());
+                    System.err.println("[yepure] L2 error: " + e.getMessage());
                 } finally {
                     llmRunning = false;
                 }
@@ -661,9 +661,9 @@ Assign at most one action per unit. Unassigned units will idle.
             JsonObject json = JsonParser.parseString(response).getAsJsonObject();
 
             if (json.has("analysis"))
-                System.out.println("[yebot] Analysis: " + json.get("analysis").getAsString());
+                System.out.println("[yepure] Analysis: " + json.get("analysis").getAsString());
             if (json.has("strategy"))
-                System.out.println("[yebot] Strategy: " + json.get("strategy").getAsString());
+                System.out.println("[yepure] Strategy: " + json.get("strategy").getAsString());
 
             JsonArray assignments = json.getAsJsonArray("assignments");
             if (assignments == null) return result;
@@ -683,7 +683,7 @@ Assign at most one action per unit. Unassigned units will idle.
                 // Look up in vocabulary — if not found, silently skip (no hallucinations)
                 ActionEntry entry = vocab.byActionId.get(actionId);
                 if (entry == null) {
-                    System.out.println("[yebot] Unknown action ID: " + actionId + " (skipped)");
+                    System.out.println("[yepure] Unknown action ID: " + actionId + " (skipped)");
                     continue;
                 }
 
@@ -692,7 +692,7 @@ Assign at most one action per unit. Unassigned units will idle.
             }
 
         } catch (Exception ex) {
-            System.err.println("[yebot] Extraction error: " + ex.getMessage());
+            System.err.println("[yepure] Extraction error: " + ex.getMessage());
         }
 
         return result;
@@ -747,10 +747,10 @@ Assign at most one action per unit. Unassigned units will idle.
                     }
                 }
             } else {
-                System.err.println("[yebot] API error " + conn.getResponseCode());
+                System.err.println("[yepure] API error " + conn.getResponseCode());
             }
         } catch (Exception e) {
-            System.err.println("[yebot] HTTP error: " + e.getMessage());
+            System.err.println("[yepure] HTTP error: " + e.getMessage());
         }
         return "{\"analysis\":\"\",\"strategy\":\"\",\"assignments\":[]}";
     }
