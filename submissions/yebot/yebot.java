@@ -33,7 +33,6 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.*;
 
 public class yebot extends AbstractionLayerAI {
 
@@ -44,8 +43,8 @@ public class yebot extends AbstractionLayerAI {
             ? System.getenv("OLLAMA_MODEL") : "qwen3:8b";
     private static final String API_URL = System.getenv("OLLAMA_URL") != null
             ? System.getenv("OLLAMA_URL") : "http://localhost:11434/v1/chat/completions";
-    private static final int LLM_TIMEOUT  = 5000;
-    private static final int LLM_INTERVAL = 80;  // ticks between LLM macro calls
+    private static final int LLM_TIMEOUT   = 5000;
+    private static final int LLM_INTERVAL  = 200;  // call LLM every 200 ticks
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  UNIT TYPES
@@ -54,18 +53,10 @@ public class yebot extends AbstractionLayerAI {
     private UnitType workerType, lightType, heavyType, rangedType, baseType, barracksType;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  MACRO STRATEGY (LLM-controlled)
+    //  MACRO STRATEGY (LLM-controlled, synchronous)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Possible strategies:
-    //   WORKER_RUSH  - all workers attack, no barracks
-    //   ECON_HEAVY   - build barracks, produce heavies
-    //   ECON_RANGED  - build barracks, produce ranged
-    //   COUNTER_MIX  - produce units that counter enemy composition
-    //   ALL_IN       - stop harvesting, send everything to attack
-    private volatile String macroStrategy = "DEFAULT";
-    private volatile boolean llmRunning = false;
-    private int lastLLMTick = -LLM_INTERVAL;
-    private final ExecutorService llmThread = Executors.newSingleThreadExecutor();
+    private String macroStrategy = "DEFAULT";
+    private int lastLLMTick = -LLM_INTERVAL; // so first call fires at tick 0
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  HARVESTER MEMORY (persist across ticks)
@@ -111,7 +102,6 @@ public class yebot extends AbstractionLayerAI {
     public void reset() {
         super.reset();
         macroStrategy  = "DEFAULT";
-        llmRunning     = false;
         lastLLMTick    = -LLM_INTERVAL;
         harvesterIDs   = new ArrayList<>();
     }
@@ -142,31 +132,26 @@ public class yebot extends AbstractionLayerAI {
         // ── Populate per-tick unit lists ───────────────────────────────────────
         populateUnitLists(player, gs, pgs);
 
-        // ── Fire async LLM for macro strategy ─────────────────────────────────
-        if (!llmRunning && tick - lastLLMTick >= LLM_INTERVAL) {
+        // ── Every 200 ticks: call LLM, get macro plan ─────────────────────────
+        if (tick - lastLLMTick >= LLM_INTERVAL) {
             lastLLMTick = tick;
-            llmRunning  = true;
-            final String stateText = buildMacroStateText(player, gs, pgs);
-            llmThread.submit(() -> {
-                try {
-                    String response = callLLM(stateText);
-                    String parsed   = parseMacroStrategy(response);
-                    if (parsed != null) {
-                        macroStrategy = parsed;
-                        System.out.println("[yebot] LLM macro t=" + tick + " → " + parsed);
-                    }
-                } catch (Exception e) {
-                    System.err.println("[yebot] LLM error: " + e.getMessage());
-                } finally {
-                    llmRunning = false;
+            try {
+                String stateText = buildMacroStateText(player, gs, pgs);
+                String response  = callLLM(stateText);
+                String parsed    = parseMacroStrategy(response);
+                if (parsed != null) {
+                    macroStrategy = parsed;
+                    System.out.println("[yebot] t=" + tick + " LLM → " + parsed);
                 }
-            });
+            } catch (Exception e) {
+                System.err.println("[yebot] LLM error: " + e.getMessage());
+            }
         }
 
-        // ── Resolve effective strategy ────────────────────────────────────────
+        // ── Resolve strategy (LLM plan or Java fallback) ─────────────────────
         String strategy = resolveStrategy(mapW, tick, gs, pgs);
 
-        // ── Execute micro with macro guidance ─────────────────────────────────
+        // ── Execute micro ─────────────────────────────────────────────────────
         return executeMicro(strategy, player, gs, pgs);
     }
 
