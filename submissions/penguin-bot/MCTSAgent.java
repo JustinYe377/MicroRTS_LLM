@@ -50,9 +50,10 @@ public class MCTSAgent extends NaiveMCTS {
         NEUTRAL
     }
 
-    private static final int OPENING_END_TICK = 320;
-    private static final int OPENING_WORKER_TARGET = 2;
-    private static final int OPENING_RANGED_TARGET = 2;
+    private static final int OPENING_END_TICK = 360;
+    private static final int OPENING_WORKERS_BEFORE_BARRACKS = 1;
+    private static final int OPENING_WORKER_TARGET = 4;
+    private static final int OPENING_RANGED_TARGET = 1;
     private static final int OPENING_HEAVY_TARGET = 1;
 
     private static final int RUSH_ALERT_RADIUS = 7;
@@ -107,14 +108,30 @@ public class MCTSAgent extends NaiveMCTS {
         }
         openingComplete = true;
 
+        applyDeterministicStrategy(player, gs);
+
         int consultInterval = isGettingRushed(player, gs) ? Math.max(10, LLM_INTERVAL / 4) : LLM_INTERVAL;
         if (gs.getTime() - lastConsultTick >= consultInterval) {
             consultOllama(player, gs);
             lastConsultTick = gs.getTime();
         }
 
+        applyDeterministicStrategy(player, gs);
         applyStanceBiases();
-        return super.getAction(player, gs);
+        try {
+            return super.getAction(player, gs);
+        } catch (RuntimeException ex) {
+            try {
+                if (currentStance == Stance.ATTACK) {
+                    return "HEAVY".equals(preferredUnit)
+                            ? heavyRushPolicy.getAction(player, gs)
+                            : rangedRushPolicy.getAction(player, gs);
+                }
+                return workerDefensePolicy.getAction(player, gs);
+            } catch (RuntimeException ignored) {
+                return new PlayerAction();
+            }
+        }
     }
 
     private PlayerAction openingAction(int player, GameState gs) throws Exception {
@@ -153,9 +170,11 @@ public class MCTSAgent extends NaiveMCTS {
         out.setResourceUsage(new ResourceUsage());
         Set<Long> assigned = new HashSet<>();
 
-        if (workerCount < OPENING_WORKER_TARGET) {
+        boolean prioritizeWorkers = workerCount < OPENING_WORKERS_BEFORE_BARRACKS;
+        if (prioritizeWorkers) {
             for (Unit base : myBases) {
                 if (gs.getActionAssignment(base) != null || assigned.contains(base.getID())) continue;
+                if (!canAffordUnitTypeNow(player, workerType, out, gs)) break;
                 UnitAction trainWorker = findProduceAction(base, workerType, gs);
                 if (addIfConsistent(out, base, trainWorker, gs)) {
                     assigned.add(base.getID());
@@ -167,12 +186,14 @@ public class MCTSAgent extends NaiveMCTS {
 
         boolean barracksReady = !myBarracks.isEmpty();
         boolean barracksInProgress = hasBarracksInProgress(player, gs, barracksType);
-        if (!barracksReady && !barracksInProgress) {
+        boolean baseIsProducing = hasBaseProduceInProgress(player, gs);
+        if (!barracksReady && !barracksInProgress && !baseIsProducing) {
             Unit bestWorker = null;
             UnitAction bestBuild = null;
             int bestDist = Integer.MAX_VALUE;
             for (Unit worker : myWorkers) {
                 if (gs.getActionAssignment(worker) != null || assigned.contains(worker.getID())) continue;
+                if (!canAffordUnitTypeNow(player, barracksType, out, gs)) break;
                 UnitAction buildBarracks = findProduceAction(worker, barracksType, gs);
                 if (buildBarracks == null) continue;
                 int d = distanceToClosest(worker, myBases);
@@ -188,20 +209,50 @@ public class MCTSAgent extends NaiveMCTS {
             }
         }
 
+        if (workerCount < OPENING_WORKER_TARGET) {
+            for (Unit base : myBases) {
+                if (gs.getActionAssignment(base) != null || assigned.contains(base.getID())) continue;
+                if (!canAffordUnitTypeNow(player, workerType, out, gs)) break;
+                UnitAction trainWorker = findProduceAction(base, workerType, gs);
+                if (addIfConsistent(out, base, trainWorker, gs)) {
+                    assigned.add(base.getID());
+                    workerCount++;
+                    break;
+                }
+            }
+        }
+
         if (barracksReady) {
             for (Unit barracks : myBarracks) {
                 if (gs.getActionAssignment(barracks) != null || assigned.contains(barracks.getID())) continue;
                 if (rangedCount < OPENING_RANGED_TARGET) {
+                    if (!canAffordUnitTypeNow(player, rangedType, out, gs)) continue;
                     UnitAction trainRanged = findProduceAction(barracks, rangedType, gs);
                     if (addIfConsistent(out, barracks, trainRanged, gs)) {
                         assigned.add(barracks.getID());
                         rangedCount++;
                     }
                 } else if (heavyCount < OPENING_HEAVY_TARGET) {
+                    if (!canAffordUnitTypeNow(player, heavyType, out, gs)) continue;
                     UnitAction trainHeavy = findProduceAction(barracks, heavyType, gs);
                     if (addIfConsistent(out, barracks, trainHeavy, gs)) {
                         assigned.add(barracks.getID());
                         heavyCount++;
+                    }
+                } else {
+                    boolean preferRangedNow = rangedCount <= heavyCount;
+                    UnitAction preferred = findProduceAction(barracks, preferRangedNow ? rangedType : heavyType, gs);
+                    UnitAction alternate = findProduceAction(barracks, preferRangedNow ? heavyType : rangedType, gs);
+                    UnitAction chosen = preferred != null ? preferred : alternate;
+                    UnitType chosenType = preferRangedNow ? rangedType : heavyType;
+                    if (preferred == null && alternate != null) {
+                        chosenType = preferRangedNow ? heavyType : rangedType;
+                    }
+                    if (!canAffordUnitTypeNow(player, chosenType, out, gs)) continue;
+                    if (addIfConsistent(out, barracks, chosen, gs)) {
+                        assigned.add(barracks.getID());
+                        if (chosen != null && chosen.getUnitType() == rangedType) rangedCount++;
+                        if (chosen != null && chosen.getUnitType() == heavyType) heavyCount++;
                     }
                 }
             }
@@ -211,6 +262,11 @@ public class MCTSAgent extends NaiveMCTS {
             if (u.getPlayer() != player) continue;
             if (gs.getActionAssignment(u) != null || assigned.contains(u.getID())) continue;
             Pair<Unit, UnitAction> fromDefense = defenseMap.get(u.getID());
+            if (fromDefense != null
+                    && fromDefense.m_b != null
+                    && fromDefense.m_b.getType() == UnitAction.TYPE_PRODUCE) {
+                continue;
+            }
             if (fromDefense != null && addIfConsistent(out, fromDefense.m_a, fromDefense.m_b, gs)) {
                 assigned.add(u.getID());
             }
@@ -218,6 +274,44 @@ public class MCTSAgent extends NaiveMCTS {
 
         if (openingGoalsMet(player, gs)) openingComplete = true;
         return out;
+    }
+
+    private void applyDeterministicStrategy(int player, GameState gs) {
+        int enemy = 1 - player;
+        int myWorkers = countUnits(player, gs, "Worker");
+        int enemyWorkers = countUnits(enemy, gs, "Worker");
+        int myRanged = countUnits(player, gs, "Ranged");
+        int enemyRanged = countUnits(enemy, gs, "Ranged");
+        int myHeavy = countUnits(player, gs, "Heavy");
+        int enemyHeavy = countUnits(enemy, gs, "Heavy");
+        int myBarracks = countUnits(player, gs, "Barracks");
+        int enemyBarracks = countUnits(enemy, gs, "Barracks");
+        int myCombat = countMyCombatUnits(player, gs);
+        int enemyCombat = countMyCombatUnits(enemy, gs);
+
+        boolean underAttack = isGettingRushed(player, gs);
+        boolean enemyCollapsed = enemyBarracks == 0 && enemyCombat == 0 && enemyWorkers <= 1;
+        boolean strongCombatLead = myCombat >= 4 && myCombat >= enemyCombat + 2;
+        boolean structuralLead = myBarracks > 0 && enemyBarracks == 0 && myCombat >= Math.max(2, enemyCombat + 1);
+        boolean economySnowball = myWorkers >= enemyWorkers + 6 && myCombat >= enemyCombat;
+        boolean forceAttack = enemyCollapsed || strongCombatLead || structuralLead || economySnowball;
+        boolean forceDefend = underAttack && !forceAttack && myCombat <= enemyCombat;
+
+        if (forceAttack) {
+            currentStance = Stance.ATTACK;
+            preferredReason = "Deterministic attack trigger from decisive board advantage";
+        } else if (forceDefend) {
+            currentStance = Stance.DEFEND;
+            preferredReason = "Deterministic defend trigger while under pressure";
+        }
+
+        if (enemyRanged > enemyHeavy + 1) {
+            preferredUnit = "HEAVY";
+        } else if (enemyHeavy > enemyRanged + 1) {
+            preferredUnit = "RANGED";
+        } else {
+            preferredUnit = myRanged <= myHeavy ? "RANGED" : "HEAVY";
+        }
     }
 
     private UnitAction findProduceAction(Unit unit, UnitType unitType, GameState gs) {
@@ -240,6 +334,16 @@ public class MCTSAgent extends NaiveMCTS {
                     && uaa.action.getUnitType() == barracksType) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    private boolean hasBaseProduceInProgress(int player, GameState gs) {
+        for (UnitActionAssignment uaa : gs.getUnitActions().values()) {
+            if (uaa == null || uaa.unit == null || uaa.action == null) continue;
+            if (uaa.unit.getPlayer() != player) continue;
+            if (!"Base".equals(uaa.unit.getType().name)) continue;
+            if (uaa.action.getType() == UnitAction.TYPE_PRODUCE) return true;
         }
         return false;
     }
@@ -569,6 +673,8 @@ public class MCTSAgent extends NaiveMCTS {
         Collections.addAll(preferredActions,
                 "ATTACK_NEAR_BASE",
                 "ADVANCE",
+                "PRODUCE_RANGED",
+                "PRODUCE_HEAVY",
                 "PRODUCE_" + preferredUnit,
                 "PRODUCE_WORKER");
     }
@@ -620,6 +726,12 @@ public class MCTSAgent extends NaiveMCTS {
                 if (preferredActions.contains("PRODUCE_WORKER") && "WORKER".equals(produced)) score += 4;
                 if (preferredActions.contains("BUILD_BARRACKS") && "BARRACKS".equals(produced)) score += 6;
                 if (preferredActions.contains("PRODUCE_" + preferredUnit) && produced.equals(preferredUnit)) score += 5;
+                if (currentStance == Stance.ATTACK) {
+                    int myRanged = countUnits(activePlayer, gs_to_start_from, "Ranged");
+                    int myHeavy = countUnits(activePlayer, gs_to_start_from, "Heavy");
+                    if ("RANGED".equals(produced)) score += myRanged <= myHeavy ? 4 : 2;
+                    if ("HEAVY".equals(produced)) score += myHeavy < myRanged ? 4 : 2;
+                }
             }
 
             if (preferredActions.contains("ATTACK_NEAR_BASE")
@@ -656,12 +768,26 @@ public class MCTSAgent extends NaiveMCTS {
             if (intent == Intent.DEFENSE) defensive++;
         }
 
-        if (offensive > 0 && defensive > 0) return false;
         if (currentStance == Stance.DEFEND) return offensive == 0;
-        if (defensive > 0) return false;
 
         int combatUnits = countMyCombatUnits(activePlayer, gs_to_start_from);
-        return combatUnits <= 0 || offensive > 0;
+        if (combatUnits <= 0) return true;
+        if (offensive > 0) return true;
+        if (producesCombatUnit(pa)) return true;
+        return defensive == 0;
+    }
+
+    private boolean producesCombatUnit(PlayerAction pa) {
+        if (pa == null) return false;
+        for (Pair<Unit, UnitAction> uaa : pa.getActions()) {
+            UnitAction action = uaa.m_b;
+            if (action == null || action.getType() != UnitAction.TYPE_PRODUCE || action.getUnitType() == null) {
+                continue;
+            }
+            UnitType produced = action.getUnitType();
+            if (produced.canAttack && !produced.canHarvest) return true;
+        }
+        return false;
     }
 
     private Intent classifyIntent(Unit unit, UnitAction action, int player) {
@@ -778,6 +904,40 @@ public class MCTSAgent extends NaiveMCTS {
         return n;
     }
 
+    private int countUnits(int player, GameState gs, String typeName) {
+        if (gs == null || typeName == null) return 0;
+        int n = 0;
+        for (Unit u : gs.getPhysicalGameState().getUnits()) {
+            if (u.getPlayer() == player && typeName.equals(u.getType().name)) n++;
+        }
+        return n;
+    }
+
+    private boolean canAffordUnitTypeNow(int player, UnitType type, PlayerAction pending, GameState gs) {
+        if (type == null || gs == null || player < 0) return false;
+        ResourceUsage reserved = gs.getResourceUsage();
+        int alreadyReserved = reserved == null ? 0 : reserved.getResourcesUsed(player);
+        alreadyReserved = Math.max(alreadyReserved, committedResourcesFromAssignments(player, gs));
+        int pendingReserved = (pending == null || pending.getResourceUsage() == null)
+                ? 0
+                : pending.getResourceUsage().getResourcesUsed(player);
+        int available = gs.getPlayer(player).getResources() - alreadyReserved - pendingReserved;
+        return available >= type.cost;
+    }
+
+    private int committedResourcesFromAssignments(int player, GameState gs) {
+        if (gs == null || player < 0) return 0;
+        int committed = 0;
+        for (UnitActionAssignment uaa : gs.getUnitActions().values()) {
+            if (uaa == null || uaa.unit == null || uaa.action == null) continue;
+            if (uaa.unit.getPlayer() != player) continue;
+            if (uaa.action.getType() == UnitAction.TYPE_PRODUCE && uaa.action.getUnitType() != null) {
+                committed += uaa.action.getUnitType().cost;
+            }
+        }
+        return committed;
+    }
+
     private boolean openingGoalsMet(int player, GameState gs) {
         int workers = 0;
         int ranged = 0;
@@ -840,7 +1000,8 @@ public class MCTSAgent extends NaiveMCTS {
     private boolean addIfConsistent(PlayerAction out, Unit u, UnitAction a, GameState gs) {
         if (u == null || a == null) return false;
         ResourceUsage ru = a.resourceUsage(u, gs.getPhysicalGameState());
-        if (out.consistentWith(ru, gs)) {
+        ResourceUsage reserved = gs.getResourceUsage().mergeIntoNew(out.getResourceUsage());
+        if (reserved.consistentWith(ru, gs)) {
             out.addUnitAction(u, a);
             out.getResourceUsage().merge(ru);
             return true;
