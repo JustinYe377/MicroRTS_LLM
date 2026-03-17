@@ -1,21 +1,21 @@
 /*
  * AlliBot (LLM-guided MCTS + rule fallback)
  *
- * Flow (see getAction around line 1378):
- *  - First try LLMInformedMCTS (line ~1410). If it returns real moves, use them.
- *  - Otherwise fall back to the rule policy (line ~1215).
+ * Flow (see getAction around line 1558):
+ *  - First try LLMInformedMCTS via trySearchLLMAction() (line 1487; call at ~1560).
+ *  - Otherwise fall back to getRuleBasedAction() (line 1514; call at ~1565).
  *
  * Anti-rush focus (key methods):
- *  - Rush detection up to tick 600 + 8-tile base threat: isWorkerRush() ~740, baseUnderThreat() ~715.
- *  - Opening worker rush (first 400 ticks): workerAction() ~980, basesAction() ~1115.
- *  - All-worker defense on rush/threat: workerAction() ~1010.
- *  - Bodyblockers _bb1/_bb2 chosen in init() ~640.
- *  - Fast defensive barracks drop: buildBracks() ~1255.
- *  - Emergency worker spam during rush: basesAction() ~1115.
+ *  - Rush detection up to tick 600 + 8-tile base threat: isWorkerRush() ~723, baseUnderThreat() ~675.
+ *  - Opening worker rush (first 400 ticks): workerAction() ~778, basesAction() ~944.
+ *  - All-worker defense on rush/threat: workerAction() ~778.
+ *  - Bodyblockers _bb1/_bb2 chosen in init(): init() ~1303, assignments ~1385-1393.
+ *  - Fast defensive barracks drop: buildBracks() ~1173.
+ *  - Emergency worker spam during rush: basesAction() ~944.
  *
  * Production/attack:
- *  - buildBase() ~1315, buildBracks() ~1230, barracksAction() ~1175.
- *  - Combat targeting: goCombat() ~870, attackNearby() ~890.
+ *  - buildBase() ~1055, buildBracks() ~1173, barracksAction() ~1018.
+ *  - Combat targeting: goCombat() ~644, attackNearby() ~1244/1260/1273.
  */
 
 package ai.abstraction.submissions.allibot;
