@@ -66,9 +66,8 @@ public class yebot extends AbstractionLayerAI {
     // ─── CoS Config ───────────────────────────────────────────────────────────
     private static final int FRAME_QUEUE_SIZE = 8;  // K: more history = richer L2 context
     private static final int LLM_INTERVAL     = 200; // ~7 LLM calls per 1500-tick game
-    // Action queue: reuse each decision for 200 ticks
-    // At 3s per LLM call: 7 calls × 3s = ~21s of LLM time per game
-    private static final int ACTION_QUEUE_TTL = 200;
+    private static final int OPENING_TICKS    = 200; // first 200 ticks = opening rush phase
+    // No TTL — action queue is always valid, refreshed when LLM finishes.
 
     // ─── Unit Types ────────────────────────────────────────────────────────────
     private UnitTypeTable utt;
@@ -78,15 +77,15 @@ public class yebot extends AbstractionLayerAI {
     // Frame Queue: circular buffer of L1 summaries (rule-based, instant)
     private final Deque<String> frameQueue = new ArrayDeque<>();
 
-    // Action Queue: pre-validated actions the LLM decided, valid for ACTION_QUEUE_TTL ticks
+    // Action Queue: pre-validated actions from last LLM response. Always applied.
     // Key = unit ID, Value = the validated UnitAction to execute
     private volatile Map<Long, UnitAction> actionQueue = new HashMap<>();
-    private volatile int actionQueueExpiry = -1; // tick when queue expires
 
     // Async L2 state
     private final ExecutorService llmThread = Executors.newSingleThreadExecutor();
     private volatile boolean llmRunning = false;
     private int lastLLMTick = -LLM_INTERVAL;
+    private boolean openingFired = false;
 
     // ─── L2 System Prompt ─────────────────────────────────────────────────────
     private static final String L2_SYSTEM_PROMPT = """
@@ -136,9 +135,9 @@ Assign at most one action per unit. Unassigned units will idle.
         super.reset();
         frameQueue.clear();
         actionQueue    = new HashMap<>();
-        actionQueueExpiry = -1;
         llmRunning     = false;
         lastLLMTick    = -LLM_INTERVAL;
+        openingFired   = false;
     }
 
     public void reset(UnitTypeTable a_utt) {
@@ -173,7 +172,32 @@ Assign at most one action per unit. Unassigned units will idle.
         // ── Build action vocabulary only when about to call LLM ─────────────
         // Vocab building runs A* per unit — only do this work when needed.
         // Between LLM calls, just apply the cached actionQueue.
-        boolean needVocab = !llmRunning && tick - lastLLMTick >= LLM_INTERVAL;
+        // -- OPENING RUSH: fire at tick 0, no LLM delay --
+        if (!openingFired && !llmRunning) {
+            openingFired = true;
+            llmRunning   = true;
+            ActionVocabulary ov = buildActionVocabulary(player, gs, pgs);
+            final ActionVocabulary ovc = ov;
+            final int t0 = tick;
+            llmThread.submit(() -> {
+                try {
+                    Map<Long, UnitAction> result = callOpeningRushLLM(ovc);
+                    if (!result.isEmpty()) {
+                        actionQueue = result;
+                        System.out.println("[yebot] Opening set t=" + t0
+                                + " (" + result.size() + " units)");
+                    }
+                } catch (Exception e) {
+                    System.err.println("[yebot] Opening err: " + e.getMessage());
+                } finally {
+                    llmRunning = false;
+                }
+            });
+        }
+
+        // -- L2 strategic call after opening phase --
+        boolean needVocab = !llmRunning && tick - lastLLMTick >= LLM_INTERVAL
+                && tick >= OPENING_TICKS;
         ActionVocabulary vocab = needVocab ? buildActionVocabulary(player, gs, pgs) : null;
 
         // ── Fire async L2 if interval elapsed and vocab is non-empty ──────────
@@ -189,8 +213,9 @@ Assign at most one action per unit. Unassigned units will idle.
                     Map<Long, UnitAction> result = callL2LLM(
                             frameHistory, vocabCopy, playerCopy);
                     if (!result.isEmpty()) {
-                        actionQueue       = result;
-                        actionQueueExpiry = tickCopy + ACTION_QUEUE_TTL;
+                        actionQueue = result;
+                        System.out.println("[yebot] Queue updated at t=" + tickCopy
+                                + " (" + result.size() + " assignments)");
                     }
                 } catch (Exception e) {
                     System.err.println("[yebot] L2 error: " + e.getMessage());
@@ -201,15 +226,14 @@ Assign at most one action per unit. Unassigned units will idle.
         }
 
         // ── Apply action queue to currently idle units ─────────────────────────
-        // Queue expires after ACTION_QUEUE_TTL ticks — units acted, died, or changed
+        // Always apply last known decisions — stale > nothing.
+        // Dead/missing units are safely ignored (not in pgs.getUnits()).
         PlayerAction pa = new PlayerAction();
-
-        if (tick <= actionQueueExpiry) {
-            Map<Long, UnitAction> queue = actionQueue;
+        Map<Long, UnitAction> queue = actionQueue;
+        if (!queue.isEmpty()) {
             for (Unit u : pgs.getUnits()) {
                 if (u.getPlayer() != player) continue;
                 if (gs.getActionAssignment(u) != null) continue;
-
                 UnitAction ua = queue.get(u.getID());
                 if (ua != null && ua.getType() != UnitAction.TYPE_NONE
                         && gs.isUnitActionAllowed(u, ua)) {
@@ -623,6 +647,58 @@ Assign at most one action per unit. Unassigned units will idle.
 
         // Action extractor: parse LLM assignments, map to UnitActions via vocab
         return extractActions(response, vocab);
+    }
+
+    private Map<Long, UnitAction> callOpeningRushLLM(ActionVocabulary vocab) {
+        return extractActions(callLLMRaw(buildOpeningRushPrompt(vocab)), vocab);
+    }
+
+    private String buildOpeningRushPrompt(ActionVocabulary vocab) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are executing a WORKER RUSH opening in MicroRTS (tick 0-200).\n");
+        sb.append("Assign actions to ALL units using ONLY the exact action IDs below.\n\n");
+        sb.append("=== RUSH ASSIGNMENT RULES ===\n");
+        sb.append("BASE units  -> assign train_worker (keep producing workers)\n");
+        sb.append("WORKER-0    -> assign its harvest action (ONE harvester only)\n");
+        sb.append("WORKER-1+   -> assign attack action to rush enemy (NOT harvest)\n");
+        sb.append("MILITARY    -> assign attack action toward nearest enemy\n");
+        sb.append("BARRACKS    -> assign train_ranged if available\n\n");
+        sb.append("=== STRATEGY EXPLANATION ===\n");
+        sb.append("Workers deal 1 damage each. More attacking workers = more DPS.\n");
+        sb.append("One harvester keeps the base training new workers every tick.\n");
+        sb.append("New workers should attack immediately, not harvest.\n\n");
+        sb.append("=== AVAILABLE ACTIONS ===\n");
+
+        int workerCount = 0;
+        for (Map.Entry<String, List<ActionEntry>> e : vocab.byUnitId.entrySet()) {
+            String uid = e.getKey();
+            sb.append("Unit ").append(uid).append(":\n");
+            boolean isWorker = uid.startsWith("W");
+            boolean isFirstWorker = uid.equals("W0");
+            for (ActionEntry ae : e.getValue()) {
+                String hint = "";
+                if (ae.actionId.contains("train_worker"))      hint = "  <-- ASSIGN THIS for base";
+                else if (ae.actionId.contains("harvest") && isFirstWorker)
+                                                               hint = "  <-- ASSIGN THIS for W0 only";
+                else if (ae.actionId.contains("attack") && isWorker && !isFirstWorker)
+                                                               hint = "  <-- ASSIGN THIS to rush enemy";
+                else if (ae.actionId.contains("train_ranged")) hint = "  <-- assign for barracks";
+                else if (ae.actionId.contains("return"))       hint = "  <-- only if carrying";
+                sb.append("  ").append(ae.actionId).append(hint).append("\n");
+            }
+        }
+
+        sb.append("\n=== OUTPUT FORMAT (JSON only) ===\n");
+        sb.append("{\n");
+        sb.append("  \"analysis\": \"Worker rush opening: one harvests, rest attack\",\n");
+        sb.append("  \"strategy\": \"Flood enemy base with workers now\",\n");
+        sb.append("  \"assignments\": [\n");
+        sb.append("    {\"unit_id\": \"BASE0\", \"action_id\": \"BASE0_train_worker\"},\n");
+        sb.append("    {\"unit_id\": \"W0\", \"action_id\": \"W0_harvest_at_X_Y\"},\n");
+        sb.append("    {\"unit_id\": \"W1\", \"action_id\": \"W1_attack_nearest_enemy_at_X_Y\"}\n");
+        sb.append("  ]\n}\n");
+        sb.append("Replace X_Y with actual coordinates from IDs above. Copy IDs exactly.\n");
+        return sb.toString();
     }
 
     private String buildL2Prompt(String frameHistory, ActionVocabulary vocab) {
