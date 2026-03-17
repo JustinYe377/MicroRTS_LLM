@@ -259,8 +259,8 @@ public class yebot extends AbstractionLayerAI {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  PHASE 1: REACTIVE COMBAT — every unit attacks nearby enemies
-    //  Uses counter-unit targeting priorities
+    //  PHASE 1: REACTIVE COMBAT — units in attack range always attack
+    //  Only fires on enemies already within weapon range (no chasing)
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void reactiveAttackAll(int player, GameState gs, PhysicalGameState pgs) {
@@ -268,18 +268,15 @@ public class yebot extends AbstractionLayerAI {
             if (u.getPlayer() != player) continue;
             if (gs.getActionAssignment(u) != null) continue;
             if (!u.getType().canAttack) continue;
+            if (u.getType().canHarvest) continue; // let strategy phase handle workers
 
-            Unit target = findBestTarget(u, gs, pgs);
-            if (target != null) {
-                int dist = manhattanDist(u, target);
+            // Non-worker combat units: attack if enemy in weapon range
+            for (Unit enemy : allEnemies) {
+                int dist = manhattanDist(u, enemy);
                 if (dist <= u.getType().attackRange) {
-                    // In range → attack
-                    attack(u, target);
-                } else if (dist <= u.getType().attackRange + 2) {
-                    // Very close → move to attack
-                    attack(u, target);
+                    attack(u, enemy);
+                    break;
                 }
-                // If farther, don't commit here — let strategy phase handle movement
             }
         }
     }
@@ -292,18 +289,16 @@ public class yebot extends AbstractionLayerAI {
      *   Worker → prefers Ranged (swarm) or nearest anything
      *
      * Within priority class, prefer low-HP targets (focus fire).
+     * No range limit — caller decides whether to chase.
      */
     private Unit findBestTarget(Unit attacker, GameState gs, PhysicalGameState pgs) {
         UnitType myType = attacker.getType();
-        int range = myType.attackRange + 2; // engagement range
 
         Unit bestTarget = null;
         int bestScore = Integer.MIN_VALUE;
 
         for (Unit enemy : allEnemies) {
             int dist = manhattanDist(attacker, enemy);
-            if (dist > range) continue;
-
             int score = 0;
 
             // ── Counter-unit priority bonus ───────────────────────────────────
@@ -316,18 +311,18 @@ public class yebot extends AbstractionLayerAI {
             else if (myType == workerType && enemy.getType() == rangedType) score += 80;
             else if (myType == workerType && enemy.getType() == workerType) score += 60;
 
-            // Prefer buildings if no combat units nearby
+            // Prefer buildings
             if (enemy.getType() == baseType)     score += 40;
             if (enemy.getType() == barracksType) score += 50;
 
-            // Focus fire: prefer low HP targets (can kill them)
+            // Focus fire: prefer low HP targets
             score += (20 - enemy.getHitPoints());
 
-            // Prefer closer targets
+            // Prefer closer targets (strong weight so distance matters)
             score -= dist * 5;
 
-            // Big bonus if we can kill this tick
-            if (enemy.getHitPoints() <= myType.attackRange) score += 200;
+            // Bonus if we can kill this tick
+            if (enemy.getHitPoints() <= myType.maxDamage) score += 200;
 
             if (score > bestScore) {
                 bestScore = score;
@@ -342,7 +337,7 @@ public class yebot extends AbstractionLayerAI {
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void doWorkerRush(int player, GameState gs, PhysicalGameState pgs) {
-        // Base: keep training workers
+        // Base: keep training workers nonstop
         for (Unit base : myBases) {
             if (gs.getActionAssignment(base) != null) continue;
             if (canAfford(player, gs, workerType)) {
@@ -351,22 +346,37 @@ public class yebot extends AbstractionLayerAI {
             }
         }
 
-        // One harvester, rest attack
-        boolean hasHarvester = false;
+        List<Unit> freeWorkers = new ArrayList<>();
         for (Unit w : myWorkers) {
             if (gs.getActionAssignment(w) != null) continue;
+            freeWorkers.add(w);
+        }
+        if (freeWorkers.isEmpty()) return;
 
-            if (!hasHarvester && !myBases.isEmpty() && !resources.isEmpty()) {
-                Unit res = nearest(w, resources);
-                Unit base = nearest(w, myBases);
-                if (res != null && base != null) {
-                    harvest(w, res, base);
-                    hasHarvester = true;
-                    continue;
+        // If no base, build one with first worker
+        if (myBases.isEmpty() && canAfford(player, gs, baseType)) {
+            Unit builder = freeWorkers.remove(0);
+            build(builder, baseType, builder.getX(), builder.getY());
+            resourcesUsed += baseType.cost;
+        }
+
+        // First free worker harvests
+        if (!freeWorkers.isEmpty()) {
+            Unit harvester = freeWorkers.remove(0);
+            Unit closestRes = nearest(harvester, resources);
+            Unit closestBase = nearest(harvester, myBases);
+            if (closestRes != null && closestBase != null) {
+                harvest(harvester, closestRes, closestBase);
+            } else {
+                // No resource or no base — just attack
+                if (!allEnemies.isEmpty()) {
+                    attack(harvester, nearest(harvester, allEnemies));
                 }
             }
+        }
 
-            // Attack nearest enemy
+        // All remaining workers: attack nearest enemy
+        for (Unit w : freeWorkers) {
             if (!allEnemies.isEmpty()) {
                 attack(w, nearest(w, allEnemies));
             }
