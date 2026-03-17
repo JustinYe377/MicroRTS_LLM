@@ -298,10 +298,7 @@ public class yebot extends AbstractionLayerAI {
             if (harvestWorker.getResources() > 0) {
                 if (closestBase != null) {
                     AbstractAction aa = getAbstractAction(harvestWorker);
-                    if (aa instanceof Harvest) {
-                        Harvest h = (Harvest) aa;
-                        if (h.base != closestBase) harvest(harvestWorker, null, closestBase);
-                    } else {
+                    if (!(aa instanceof Harvest)) {
                         harvest(harvestWorker, null, closestBase);
                     }
                     harvestWorkerFree = false;
@@ -309,11 +306,7 @@ public class yebot extends AbstractionLayerAI {
             } else {
                 if (closestResource != null && closestBase != null) {
                     AbstractAction aa = getAbstractAction(harvestWorker);
-                    if (aa instanceof Harvest) {
-                        Harvest h = (Harvest) aa;
-                        if (h.target != closestResource || h.base != closestBase)
-                            harvest(harvestWorker, closestResource, closestBase);
-                    } else {
+                    if (!(aa instanceof Harvest)) {
                         harvest(harvestWorker, closestResource, closestBase);
                     }
                     harvestWorkerFree = false;
@@ -487,10 +480,7 @@ public class yebot extends AbstractionLayerAI {
         if (hw.getResources() > 0) {
             if (closestBase != null) {
                 AbstractAction aa = getAbstractAction(hw);
-                if (aa instanceof Harvest) {
-                    if (((Harvest) aa).base != closestBase)
-                        harvest(hw, null, closestBase);
-                } else {
+                if (!(aa instanceof Harvest)) {
                     harvest(hw, null, closestBase);
                 }
                 return true;
@@ -499,11 +489,7 @@ public class yebot extends AbstractionLayerAI {
         } else {
             if (closestResource != null && closestBase != null) {
                 AbstractAction aa = getAbstractAction(hw);
-                if (aa instanceof Harvest) {
-                    Harvest h = (Harvest) aa;
-                    if (h.target != closestResource || h.base != closestBase)
-                        harvest(hw, closestResource, closestBase);
-                } else {
+                if (!(aa instanceof Harvest)) {
                     harvest(hw, closestResource, closestBase);
                 }
                 return true;
