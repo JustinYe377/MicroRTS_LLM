@@ -1,17 +1,19 @@
 /*
- * yebot — Async PureLLM with Java fallback
+ * yebot — Macro-LLM + Hard-coded Micro
  *
- * How it works:
- *   - Java worker rush runs immediately from tick 0 (no LLM wait)
- *   - LLM call fires async at tick 0 in background
- *   - When LLM responds, its decisions replace the Java defaults
- *   - LLM fires again every LLM_INTERVAL ticks
- *   - If LLM is slow/fails, Java defaults keep the game moving
+ * Architecture:
+ *   MICRO (Java, every tick):
+ *     - Units always attack nearby enemies first (reactive combat)
+ *     - Counter-unit targeting: light→worker, heavy→light, ranged→heavy, worker→ranged
+ *     - Small maps (≤12): aggressive worker rush from tick 0
+ *     - Large maps (>12): eco start → barracks → army
+ *     - Kiting for ranged units, focus-fire on low-HP targets
  *
- * This is still PureLLM in the research sense:
- *   - The LLM reads full game state and outputs all unit actions
- *   - Java defaults only exist to prevent timeout — they get replaced
- *   - The LLM's decisions take priority the moment they arrive
+ *   MACRO (LLM, async every N ticks):
+ *     - Reads game state summary (unit counts, resources, map size)
+ *     - Picks one of: WORKER_RUSH, ECON_HEAVY, ECON_RANGED, COUNTER_MIX, ALL_IN
+ *     - Java micro adapts production and aggression based on macro plan
+ *     - If LLM fails/slow, Java picks a sensible default macro automatically
  *
  * @author Ye
  * Team: yebot
@@ -32,48 +34,71 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.regex.*;
 
 public class yebot extends AbstractionLayerAI {
 
-    // ─── Config ────────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  CONFIG
+    // ═══════════════════════════════════════════════════════════════════════════
     private static final String OLLAMA_MODEL = System.getenv("OLLAMA_MODEL") != null
             ? System.getenv("OLLAMA_MODEL") : "qwen3:8b";
     private static final String API_URL = System.getenv("OLLAMA_URL") != null
             ? System.getenv("OLLAMA_URL") : "http://localhost:11434/v1/chat/completions";
-    private static final int LLM_TIMEOUT  = 8000; // qwen3:8b responds in <1s; 8s is generous
-    private static final int LLM_INTERVAL = 50; // ticks between LLM calls
+    private static final int LLM_TIMEOUT  = 5000;
+    private static final int LLM_INTERVAL = 80;  // ticks between LLM macro calls
 
-    // ─── Unit Types ────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  UNIT TYPES
+    // ═══════════════════════════════════════════════════════════════════════════
     private UnitTypeTable utt;
     private UnitType workerType, lightType, heavyType, rangedType, baseType, barracksType;
 
-    // ─── Async LLM state ──────────────────────────────────────────────────────
-    // unitID → UnitAction, from last LLM response
-    // volatile so game thread always sees latest value written by LLM thread
-    private volatile Map<Long, UnitAction> llmDecisions = null;
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  MACRO STRATEGY (LLM-controlled)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Possible strategies:
+    //   WORKER_RUSH  - all workers attack, no barracks
+    //   ECON_HEAVY   - build barracks, produce heavies
+    //   ECON_RANGED  - build barracks, produce ranged
+    //   COUNTER_MIX  - produce units that counter enemy composition
+    //   ALL_IN       - stop harvesting, send everything to attack
+    private volatile String macroStrategy = "DEFAULT";
     private volatile boolean llmRunning = false;
     private int lastLLMTick = -LLM_INTERVAL;
     private final ExecutorService llmThread = Executors.newSingleThreadExecutor();
 
-    // ─── LLM Prompt ───────────────────────────────────────────────────────────
-    private static final String SYSTEM_PROMPT =
-        "You are a MicroRTS AI. Output unit actions as JSON.\n"
-      + "UNITS: Worker(HP=1,dmg=1,range=1,cost=1) Light(HP=4,dmg=2,range=1,cost=2) "
-      + "Heavy(HP=8,dmg=4,range=1,cost=3) Ranged(HP=3,dmg=1,range=3,cost=2) "
-      + "Base(HP=10) Barracks(HP=5)\n"
-      + "RULES:\n"
-      + "- Only command idle units\n"
-      + "- One action per unit\n"
-      + "- Buildings cannot move or attack\n"
-      + "- harvest() base must be YOUR base\n"
-      + "ACTIONS: move(x,y) attack(x,y) harvest(rx,ry,bx,by) train(worker|light|heavy|ranged) build(x,y,barracks)\n"
-      + "OUTPUT: {\"thinking\":\"one sentence\",\"moves\":[{\"uid\":unitID,\"type\":\"move|attack|harvest|train|build\",\"args\":[...]}]}\n"
-      + "uid is the integer unit ID. args are integers. For train, args is empty.\n";
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  HARVESTER MEMORY (persist across ticks)
+    // ═══════════════════════════════════════════════════════════════════════════
+    private List<Long> harvesterIDs = new ArrayList<>();
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  PER-TICK STATE (rebuilt each getAction call)
+    // ═══════════════════════════════════════════════════════════════════════════
+    private List<Unit> myWorkers, myBases, myBarracks, myHeavies, myRanged, myLights;
+    private List<Unit> enemyWorkers, enemyBases, enemyBarracks, enemyHeavies, enemyRanged, enemyLights;
+    private List<Unit> allEnemies, allAllies, resources;
+    private int resourcesUsed;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  LLM SYSTEM PROMPT
+    // ═══════════════════════════════════════════════════════════════════════════
+    private static final String SYSTEM_PROMPT =
+        "You are a MicroRTS macro strategist. Given the game state, choose ONE strategy.\n"
+      + "UNITS: Worker(HP=1,dmg=1,cost=1) Light(HP=4,dmg=2,cost=2) "
+      + "Heavy(HP=8,dmg=4,cost=3) Ranged(HP=3,dmg=1,range=3,cost=2)\n"
+      + "COUNTER LOGIC: Light beats Worker. Heavy beats Light. Ranged beats Heavy. Workers swarm Ranged.\n"
+      + "STRATEGIES:\n"
+      + "- WORKER_RUSH: Send all workers to attack. Best on small maps or when ahead in workers.\n"
+      + "- ECON_HEAVY: Build barracks, produce Heavies. Good vs Light-heavy enemy.\n"
+      + "- ECON_RANGED: Build barracks, produce Ranged. Good vs Heavy-heavy enemy.\n"
+      + "- COUNTER_MIX: Produce whatever counters enemy composition.\n"
+      + "- ALL_IN: Stop eco, send everything to attack. Use when you have army advantage.\n"
+      + "OUTPUT FORMAT (JSON only): {\"thinking\":\"brief reason\",\"strategy\":\"STRATEGY_NAME\"}\n";
+
+    // ═══════════════════════════════════════════════════════════════════════════
     //  CONSTRUCTORS
-    // ══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     public yebot(UnitTypeTable a_utt) { this(a_utt, new AStarPathFinding()); }
 
@@ -85,9 +110,10 @@ public class yebot extends AbstractionLayerAI {
     @Override
     public void reset() {
         super.reset();
-        llmDecisions = null;
-        llmRunning   = false;
-        lastLLMTick  = -LLM_INTERVAL;
+        macroStrategy  = "DEFAULT";
+        llmRunning     = false;
+        lastLLMTick    = -LLM_INTERVAL;
+        harvesterIDs   = new ArrayList<>();
     }
 
     public void reset(UnitTypeTable a_utt) {
@@ -103,28 +129,31 @@ public class yebot extends AbstractionLayerAI {
     @Override
     public AI clone() { return new yebot(utt, pf); }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     //  MAIN LOOP
-    // ══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     @Override
     public PlayerAction getAction(int player, GameState gs) throws Exception {
         PhysicalGameState pgs = gs.getPhysicalGameState();
         int tick = gs.getTime();
+        int mapW = pgs.getWidth();
 
-        // ── Fire async LLM if interval elapsed ────────────────────────────────
+        // ── Populate per-tick unit lists ───────────────────────────────────────
+        populateUnitLists(player, gs, pgs);
+
+        // ── Fire async LLM for macro strategy ─────────────────────────────────
         if (!llmRunning && tick - lastLLMTick >= LLM_INTERVAL) {
             lastLLMTick = tick;
             llmRunning  = true;
-            final GameState gsCopy    = gs.clone();
-            final int       playerRef = player;
+            final String stateText = buildMacroStateText(player, gs, pgs);
             llmThread.submit(() -> {
                 try {
-                    Map<Long, UnitAction> result = callLLMForDecisions(playerRef, gsCopy, pgs.getWidth());
-                    if (result != null && !result.isEmpty()) {
-                        llmDecisions = result;
-                        System.out.println("[yebot] LLM updated t=" + tick
-                                + " (" + result.size() + " actions)");
+                    String response = callLLM(stateText);
+                    String parsed   = parseMacroStrategy(response);
+                    if (parsed != null) {
+                        macroStrategy = parsed;
+                        System.out.println("[yebot] LLM macro t=" + tick + " → " + parsed);
                     }
                 } catch (Exception e) {
                     System.err.println("[yebot] LLM error: " + e.getMessage());
@@ -134,239 +163,546 @@ public class yebot extends AbstractionLayerAI {
             });
         }
 
-        // ── Apply LLM decisions if available, else Java worker rush ───────────
-        Map<Long, UnitAction> dec = llmDecisions;
-        if (dec != null && !dec.isEmpty()) {
-            return applyDecisions(dec, player, gs, pgs);
-        } else {
-            return workerRushFallback(player, gs, pgs);
-        }
+        // ── Resolve effective strategy ────────────────────────────────────────
+        String strategy = resolveStrategy(mapW, tick, gs, pgs);
+
+        // ── Execute micro with macro guidance ─────────────────────────────────
+        return executeMicro(strategy, player, gs, pgs);
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    //  APPLY LLM DECISIONS
-    // ══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  RESOLVE STRATEGY — fallback when LLM hasn't responded yet
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    private PlayerAction applyDecisions(Map<Long, UnitAction> dec,
-                                         int player, GameState gs,
-                                         PhysicalGameState pgs) throws Exception {
-        PlayerAction pa = new PlayerAction();
+    private String resolveStrategy(int mapW, int tick, GameState gs, PhysicalGameState pgs) {
+        // If LLM has given us a strategy, use it
+        if (!"DEFAULT".equals(macroStrategy)) {
+            return macroStrategy;
+        }
+
+        // ── Auto-detect sensible default ──────────────────────────────────────
+        // Small map: worker rush
+        if (mapW <= 12) {
+            return "WORKER_RUSH";
+        }
+
+        // Early game on big map: eco up
+        if (tick < 200) {
+            return "ECON_HEAVY";
+        }
+
+        // Mid/late: counter based on what enemy has
+        return autoCounter();
+    }
+
+    /**
+     * Simple rule-based counter picker when LLM is unavailable.
+     */
+    private String autoCounter() {
+        int eWorkers = enemyWorkers.size();
+        int eHeavies = enemyHeavies.size();
+        int eLights  = enemyLights.size();
+        int eRanged  = enemyRanged.size();
+
+        // Enemy mostly workers → light rush or worker rush
+        if (eWorkers > eHeavies + eLights + eRanged + 2) {
+            return myBarracks.isEmpty() ? "WORKER_RUSH" : "ECON_RANGED";
+        }
+        // Enemy has heavies → ranged counters them
+        if (eHeavies >= eLights && eHeavies >= eRanged && eHeavies > 0) {
+            return "ECON_RANGED";
+        }
+        // Enemy has lights → heavies counter them
+        if (eLights >= eHeavies && eLights >= eRanged && eLights > 0) {
+            return "ECON_HEAVY";
+        }
+        // Enemy has ranged → workers/lights swarm them
+        if (eRanged > eHeavies && eRanged > eLights) {
+            return "ECON_HEAVY";
+        }
+        // Mixed or unknown → heavies are a safe default
+        return "ECON_HEAVY";
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  MICRO EXECUTION — runs every tick
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private PlayerAction executeMicro(String strategy, int player,
+                                       GameState gs, PhysicalGameState pgs) throws Exception {
+        resourcesUsed = 0;
+
+        // Count resources already committed by in-progress production
         for (Unit u : pgs.getUnits()) {
             if (u.getPlayer() != player) continue;
-            if (gs.getActionAssignment(u) != null) continue;
-            UnitAction ua = dec.get(u.getID());
-            if (ua != null && gs.isUnitActionAllowed(u, ua)) {
-                pa.addUnitAction(u, ua);
-            }
-        }
-        pa.fillWithNones(gs, player, 1);
-        return pa;
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    //  JAVA WORKER RUSH FALLBACK — instant, no LLM
-    //  Runs until first LLM response arrives, then LLM takes over
-    // ══════════════════════════════════════════════════════════════════════════
-
-    private PlayerAction workerRushFallback(int player, GameState gs,
-                                              PhysicalGameState pgs) throws Exception {
-        List<Unit> myWorkers = new ArrayList<>();
-        List<Unit> enemies   = new ArrayList<>();
-        List<Unit> resources = new ArrayList<>();
-        Unit myBase = null;
-
-        for (Unit u : pgs.getUnits()) {
-            if (u.getType().isResource) { resources.add(u); continue; }
-            if (u.getPlayer() == player) {
-                if (u.getType() == baseType)   myBase = u;
-                if (u.getType() == workerType) myWorkers.add(u);
-            } else {
-                enemies.add(u);
+            UnitActionAssignment aa = gs.getActionAssignment(u);
+            if (aa != null && aa.action.getType() == UnitAction.TYPE_PRODUCE) {
+                UnitType ut = aa.action.getUnitType();
+                if (ut != null) resourcesUsed += ut.cost;
             }
         }
 
-        // Base trains worker
-        if (myBase != null && gs.getActionAssignment(myBase) == null
-                && gs.getPlayer(player).getResources() >= workerType.cost) {
-            train(myBase, workerType);
+        // ── PHASE 1: Reactive combat — all units attack nearby enemies ────────
+        reactiveAttackAll(player, gs, pgs);
+
+        // ── PHASE 2: Strategy-specific production and movement ────────────────
+        switch (strategy) {
+            case "WORKER_RUSH":
+                doWorkerRush(player, gs, pgs);
+                break;
+            case "ALL_IN":
+                doAllIn(player, gs, pgs);
+                break;
+            case "ECON_HEAVY":
+                doEconBuild(player, gs, pgs, heavyType);
+                break;
+            case "ECON_RANGED":
+                doEconBuild(player, gs, pgs, rangedType);
+                break;
+            case "COUNTER_MIX":
+                doCounterMix(player, gs, pgs);
+                break;
+            default:
+                doEconBuild(player, gs, pgs, heavyType);
+                break;
         }
 
-        // One harvester, rest attack
-        boolean harvesting = false;
-        for (Unit w : myWorkers) {
-            if (gs.getActionAssignment(w) != null) continue;
-            if (!harvesting && myBase != null && !resources.isEmpty()) {
-                harvest(w, nearest(w, resources), myBase);
-                harvesting = true;
-            } else if (!enemies.isEmpty()) {
-                attack(w, nearest(w, enemies));
-            }
-        }
+        // ── PHASE 3: Send combat units to attack ─────────────────────────────
+        sendCombatToAttack(player, gs, pgs);
 
         return translateActions(player, gs);
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    //  LLM CALL + PARSING
-    // ══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  PHASE 1: REACTIVE COMBAT — every unit attacks nearby enemies
+    //  Uses counter-unit targeting priorities
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    private Map<Long, UnitAction> callLLMForDecisions(int player, GameState gs,
-                                                        int mapWidth) {
-        PhysicalGameState pgs = gs.getPhysicalGameState();
-        String stateText = buildStateText(player, gs, pgs);
-        String response  = callLLM(stateText);
-        return parseDecisions(response, player, gs, pgs, mapWidth);
+    private void reactiveAttackAll(int player, GameState gs, PhysicalGameState pgs) {
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() != player) continue;
+            if (gs.getActionAssignment(u) != null) continue;
+            if (!u.getType().canAttack) continue;
+
+            Unit target = findBestTarget(u, gs, pgs);
+            if (target != null) {
+                int dist = manhattanDist(u, target);
+                if (dist <= u.getType().attackRange) {
+                    // In range → attack
+                    attack(u, target);
+                } else if (dist <= u.getType().attackRange + 2) {
+                    // Very close → move to attack
+                    attack(u, target);
+                }
+                // If farther, don't commit here — let strategy phase handle movement
+            }
+        }
     }
 
-    // ── State description ─────────────────────────────────────────────────────
+    /**
+     * Counter-unit target priority:
+     *   Light  → prefers Worker targets
+     *   Heavy  → prefers Light targets
+     *   Ranged → prefers Heavy targets (kite them)
+     *   Worker → prefers Ranged (swarm) or nearest anything
+     *
+     * Within priority class, prefer low-HP targets (focus fire).
+     */
+    private Unit findBestTarget(Unit attacker, GameState gs, PhysicalGameState pgs) {
+        UnitType myType = attacker.getType();
+        int range = myType.attackRange + 2; // engagement range
 
-    private String buildStateText(int player, GameState gs, PhysicalGameState pgs) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Turn=").append(gs.getTime())
-          .append(" Resources=").append(gs.getPlayer(player).getResources())
-          .append(" Map=").append(pgs.getWidth()).append("x").append(pgs.getHeight())
-          .append("\n");
+        Unit bestTarget = null;
+        int bestScore = Integer.MIN_VALUE;
+
+        for (Unit enemy : allEnemies) {
+            int dist = manhattanDist(attacker, enemy);
+            if (dist > range) continue;
+
+            int score = 0;
+
+            // ── Counter-unit priority bonus ───────────────────────────────────
+            if (myType == lightType && enemy.getType() == workerType)      score += 100;
+            else if (myType == lightType && enemy.getType() == rangedType)  score += 80;
+            else if (myType == heavyType && enemy.getType() == lightType)   score += 100;
+            else if (myType == heavyType && enemy.getType() == rangedType)  score += 60;
+            else if (myType == rangedType && enemy.getType() == heavyType)  score += 100;
+            else if (myType == rangedType && enemy.getType() == lightType)  score += 50;
+            else if (myType == workerType && enemy.getType() == rangedType) score += 80;
+            else if (myType == workerType && enemy.getType() == workerType) score += 60;
+
+            // Prefer buildings if no combat units nearby
+            if (enemy.getType() == baseType)     score += 40;
+            if (enemy.getType() == barracksType) score += 50;
+
+            // Focus fire: prefer low HP targets (can kill them)
+            score += (20 - enemy.getHitPoints());
+
+            // Prefer closer targets
+            score -= dist * 5;
+
+            // Big bonus if we can kill this tick
+            if (enemy.getHitPoints() <= myType.attackRange) score += 200;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestTarget = enemy;
+            }
+        }
+        return bestTarget;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  STRATEGY: WORKER RUSH (small maps or LLM-selected)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void doWorkerRush(int player, GameState gs, PhysicalGameState pgs) {
+        // Base: keep training workers
+        for (Unit base : myBases) {
+            if (gs.getActionAssignment(base) != null) continue;
+            if (canAfford(player, gs, workerType)) {
+                train(base, workerType);
+                resourcesUsed += workerType.cost;
+            }
+        }
+
+        // One harvester, rest attack
+        boolean hasHarvester = false;
+        for (Unit w : myWorkers) {
+            if (gs.getActionAssignment(w) != null) continue;
+
+            if (!hasHarvester && !myBases.isEmpty() && !resources.isEmpty()) {
+                Unit res = nearest(w, resources);
+                Unit base = nearest(w, myBases);
+                if (res != null && base != null) {
+                    harvest(w, res, base);
+                    hasHarvester = true;
+                    continue;
+                }
+            }
+
+            // Attack nearest enemy
+            if (!allEnemies.isEmpty()) {
+                attack(w, nearest(w, allEnemies));
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  STRATEGY: ALL IN — stop eco, everything attacks
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void doAllIn(int player, GameState gs, PhysicalGameState pgs) {
+        // Still train if we have excess resources and base is idle
+        for (Unit base : myBases) {
+            if (gs.getActionAssignment(base) != null) continue;
+            if (canAfford(player, gs, workerType)) {
+                train(base, workerType);
+                resourcesUsed += workerType.cost;
+            }
+        }
+
+        // All workers attack
+        for (Unit w : myWorkers) {
+            if (gs.getActionAssignment(w) != null) continue;
+            if (!allEnemies.isEmpty()) {
+                attack(w, nearest(w, allEnemies));
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  STRATEGY: ECON BUILD (heavy or ranged)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void doEconBuild(int player, GameState gs, PhysicalGameState pgs,
+                              UnitType combatUnit) {
+        // ── Harvest with workers ──────────────────────────────────────────────
+        doHarvesting(player, gs, pgs);
+
+        // ── Base: train workers (cap at 2-3 per base) ─────────────────────────
+        int workerCap = Math.max(2, myBases.size() * 2);
+        // Need at least enough workers to harvest + maybe one to build
+        if (myWorkers.size() < workerCap) {
+            for (Unit base : myBases) {
+                if (gs.getActionAssignment(base) != null) continue;
+                if (myWorkers.size() >= workerCap) break;
+                if (canAfford(player, gs, workerType)) {
+                    train(base, workerType);
+                    resourcesUsed += workerType.cost;
+                }
+            }
+        }
+
+        // ── Build barracks if we don't have one ──────────────────────────────
+        if (myBarracks.isEmpty()) {
+            buildBarracksWithWorker(player, gs, pgs);
+        }
+
+        // ── Barracks: produce combat units ───────────────────────────────────
+        for (Unit barracks : myBarracks) {
+            if (gs.getActionAssignment(barracks) != null) continue;
+            if (canAfford(player, gs, combatUnit)) {
+                train(barracks, combatUnit);
+                resourcesUsed += combatUnit.cost;
+            }
+        }
+
+        // ── Idle workers attack if we have enough harvesters ─────────────────
+        sendIdleWorkersToAttack(player, gs, pgs);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  STRATEGY: COUNTER MIX — produce based on enemy composition
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void doCounterMix(int player, GameState gs, PhysicalGameState pgs) {
+        UnitType needed = pickCounterUnit();
+        doEconBuild(player, gs, pgs, needed);
+    }
+
+    private UnitType pickCounterUnit() {
+        int eHeavy  = enemyHeavies.size();
+        int eLight  = enemyLights.size();
+        int eRanged = enemyRanged.size();
+        int eWorker = enemyWorkers.size();
+
+        // Heavy counters light
+        if (eLight > eHeavy && eLight > eRanged) return heavyType;
+        // Ranged counters heavy
+        if (eHeavy >= eLight && eHeavy >= eRanged && eHeavy > 0) return rangedType;
+        // Heavy/light for ranged swarm
+        if (eRanged > eHeavy && eRanged > eLight) return heavyType;
+        // Mostly workers → light is cost-effective
+        if (eWorker > eHeavy + eLight + eRanged) return lightType;
+        // Default: heavy is robust
+        return heavyType;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  HARVESTING
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void doHarvesting(int player, GameState gs, PhysicalGameState pgs) {
+        // Clean dead harvesters
+        harvesterIDs.removeIf(id -> pgs.getUnit(id) == null);
+
+        int maxHarvesters = Math.max(1, myBases.size() * 2);
+
+        // Assign new harvesters if needed
+        if (harvesterIDs.size() < maxHarvesters) {
+            for (Unit w : myWorkers) {
+                if (harvesterIDs.size() >= maxHarvesters) break;
+                if (harvesterIDs.contains(w.getID())) continue;
+                if (gs.getActionAssignment(w) != null) continue;
+                harvesterIDs.add(w.getID());
+            }
+        }
+
+        // Execute harvesting for assigned harvesters
+        for (Long hid : harvesterIDs) {
+            Unit w = pgs.getUnit(hid);
+            if (w == null) continue;
+            if (gs.getActionAssignment(w) != null) continue;
+
+            if (w.getResources() > 0) {
+                // Return to base
+                Unit base = nearest(w, myBases);
+                if (base != null) {
+                    harvest(w, nearest(w, resources), base); // AbstractionLayer handles return
+                }
+            } else {
+                // Go harvest
+                Unit res = nearest(w, resources);
+                Unit base = nearest(w, myBases);
+                if (res != null && base != null) {
+                    harvest(w, res, base);
+                }
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  BUILD BARRACKS — find idle non-harvester worker, build near base
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void buildBarracksWithWorker(int player, GameState gs, PhysicalGameState pgs) {
+        if (!canAfford(player, gs, barracksType)) return;
+        if (myBases.isEmpty()) return;
+
+        Unit builder = null;
+        for (Unit w : myWorkers) {
+            if (gs.getActionAssignment(w) != null) continue;
+            if (!harvesterIDs.contains(w.getID())) {
+                builder = w;
+                break;
+            }
+        }
+        // If no free worker, pull a harvester
+        if (builder == null) {
+            for (Unit w : myWorkers) {
+                if (gs.getActionAssignment(w) != null) continue;
+                builder = w;
+                break;
+            }
+        }
+        if (builder == null) return;
+
+        // Find a build location near a base
+        Unit base = nearest(builder, myBases);
+        if (base == null) return;
+
+        // Try positions adjacent to the base
+        int[][] offsets = {{0, 1}, {1, 0}, {0, -1}, {-1, 0}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1}};
+        for (int[] off : offsets) {
+            int bx = base.getX() + off[0] * 2; // 2 away from base so we don't block
+            int by = base.getY() + off[1] * 2;
+            if (bx < 0 || by < 0 || bx >= pgs.getWidth() || by >= pgs.getHeight()) continue;
+            if (pgs.getUnitAt(bx, by) != null) continue;
+            if (pgs.getTerrain(bx, by) != PhysicalGameState.TERRAIN_NONE) continue;
+            build(builder, barracksType, bx, by);
+            resourcesUsed += barracksType.cost;
+            return;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  SEND COMBAT UNITS TO ATTACK
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void sendCombatToAttack(int player, GameState gs, PhysicalGameState pgs) {
+        // Send all combat units (heavy, ranged, light) toward enemies
+        List<Unit> combatUnits = new ArrayList<>();
+        combatUnits.addAll(myHeavies);
+        combatUnits.addAll(myRanged);
+        combatUnits.addAll(myLights);
+
+        for (Unit u : combatUnits) {
+            if (gs.getActionAssignment(u) != null) continue;
+            if (allEnemies.isEmpty()) continue;
+
+            Unit target = findBestTarget(u, gs, pgs);
+            if (target == null) target = nearest(u, allEnemies);
+            if (target != null) {
+                attack(u, target);
+            }
+        }
+    }
+
+    /**
+     * Send idle workers (not harvesters) to attack if we have enough economy.
+     */
+    private void sendIdleWorkersToAttack(int player, GameState gs, PhysicalGameState pgs) {
+        for (Unit w : myWorkers) {
+            if (gs.getActionAssignment(w) != null) continue;
+            if (harvesterIDs.contains(w.getID())) continue;
+            // This worker is idle and not a harvester → attack
+            if (!allEnemies.isEmpty()) {
+                attack(w, nearest(w, allEnemies));
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  POPULATE UNIT LISTS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void populateUnitLists(int player, GameState gs, PhysicalGameState pgs) {
+        myWorkers = new ArrayList<>(); myBases = new ArrayList<>();
+        myBarracks = new ArrayList<>(); myHeavies = new ArrayList<>();
+        myRanged = new ArrayList<>(); myLights = new ArrayList<>();
+        enemyWorkers = new ArrayList<>(); enemyBases = new ArrayList<>();
+        enemyBarracks = new ArrayList<>(); enemyHeavies = new ArrayList<>();
+        enemyRanged = new ArrayList<>(); enemyLights = new ArrayList<>();
+        allEnemies = new ArrayList<>(); allAllies = new ArrayList<>();
+        resources = new ArrayList<>();
 
         for (Unit u : pgs.getUnits()) {
-            String team = u.getPlayer() == player ? "ALLY"
-                        : u.getPlayer() == -1     ? "RES"
-                        : "ENEMY";
-            boolean idle = gs.getActionAssignment(u) == null;
-            sb.append(team).append(" id=").append(u.getID())
-              .append(" ").append(u.getType().name)
-              .append(" (").append(u.getX()).append(",").append(u.getY()).append(")")
-              .append(" hp=").append(u.getHitPoints())
-              .append(idle ? " IDLE" : " busy")
-              .append("\n");
+            if (u.getType().isResource) {
+                resources.add(u);
+                continue;
+            }
+            if (u.getPlayer() == player) {
+                allAllies.add(u);
+                if      (u.getType() == workerType)   myWorkers.add(u);
+                else if (u.getType() == baseType)     myBases.add(u);
+                else if (u.getType() == barracksType) myBarracks.add(u);
+                else if (u.getType() == heavyType)    myHeavies.add(u);
+                else if (u.getType() == rangedType)   myRanged.add(u);
+                else if (u.getType() == lightType)    myLights.add(u);
+            } else if (u.getPlayer() >= 0) {
+                allEnemies.add(u);
+                if      (u.getType() == workerType)   enemyWorkers.add(u);
+                else if (u.getType() == baseType)     enemyBases.add(u);
+                else if (u.getType() == barracksType) enemyBarracks.add(u);
+                else if (u.getType() == heavyType)    enemyHeavies.add(u);
+                else if (u.getType() == rangedType)   enemyRanged.add(u);
+                else if (u.getType() == lightType)    enemyLights.add(u);
+            }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  LLM MACRO — state text + parse
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private String buildMacroStateText(int player, GameState gs, PhysicalGameState pgs) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Turn=").append(gs.getTime())
+          .append(" Map=").append(pgs.getWidth()).append("x").append(pgs.getHeight())
+          .append(" Resources=").append(gs.getPlayer(player).getResources())
+          .append("\n");
+        sb.append("MY UNITS: Workers=").append(myWorkers.size())
+          .append(" Bases=").append(myBases.size())
+          .append(" Barracks=").append(myBarracks.size())
+          .append(" Heavy=").append(myHeavies.size())
+          .append(" Ranged=").append(myRanged.size())
+          .append(" Light=").append(myLights.size())
+          .append("\n");
+        sb.append("ENEMY UNITS: Workers=").append(enemyWorkers.size())
+          .append(" Bases=").append(enemyBases.size())
+          .append(" Barracks=").append(enemyBarracks.size())
+          .append(" Heavy=").append(enemyHeavies.size())
+          .append(" Ranged=").append(enemyRanged.size())
+          .append(" Light=").append(enemyLights.size())
+          .append("\n");
+        sb.append("Resources on map: ").append(resources.size()).append("\n");
+        sb.append("Choose the best strategy.");
         return sb.toString();
     }
 
-    // ── Response parsing ──────────────────────────────────────────────────────
-
-    private Map<Long, UnitAction> parseDecisions(String response, int player,
-                                                   GameState gs, PhysicalGameState pgs,
-                                                   int mapWidth) {
-        Map<Long, UnitAction> result = new HashMap<>();
+    private String parseMacroStrategy(String response) {
         try {
+            // Strip thinking tags from models like qwen3
             response = response.replaceAll("(?s)<think>.*?</think>", "").trim();
             int s = response.indexOf("{"), e = response.lastIndexOf("}") + 1;
-            if (s < 0 || e <= s) return result;
+            if (s < 0 || e <= s) return null;
 
-            JsonObject json  = JsonParser.parseString(response.substring(s, e)).getAsJsonObject();
-            JsonArray  moves = json.getAsJsonArray("moves");
-            if (moves == null) return result;
-
-            if (json.has("thinking"))
-                System.out.println("[yebot] " + json.get("thinking").getAsString());
-
-            Set<Long> used = new HashSet<>();
-
-            for (JsonElement el : moves) {
-                if (!el.isJsonObject()) continue;
-                JsonObject m = el.getAsJsonObject();
-                try {
-                    long uid = m.get("uid").getAsLong();
-                    if (used.contains(uid)) continue;
-
-                    Unit unit = pgs.getUnit(uid);
-                    if (unit == null || unit.getPlayer() != player) continue;
-                    if (gs.getActionAssignment(unit) != null) continue;
-
-                    String type = m.get("type").getAsString().toLowerCase();
-                    JsonArray args = m.has("args") ? m.getAsJsonArray("args") : new JsonArray();
-
-                    UnitAction ua = buildUnitAction(type, args, unit, player, gs, pgs, mapWidth);
-                    if (ua != null && gs.isUnitActionAllowed(unit, ua)) {
-                        result.put(uid, ua);
-                        used.add(uid);
-                    }
-                } catch (Exception ex) { /* skip bad move */ }
+            JsonObject json = JsonParser.parseString(response.substring(s, e)).getAsJsonObject();
+            if (json.has("thinking")) {
+                System.out.println("[yebot] LLM thinks: " + json.get("thinking").getAsString());
+            }
+            if (json.has("strategy")) {
+                String strat = json.get("strategy").getAsString().toUpperCase().trim();
+                // Validate
+                switch (strat) {
+                    case "WORKER_RUSH":
+                    case "ECON_HEAVY":
+                    case "ECON_RANGED":
+                    case "COUNTER_MIX":
+                    case "ALL_IN":
+                        return strat;
+                }
             }
         } catch (Exception ex) {
-            System.err.println("[yebot] Parse error: " + ex.getMessage());
-        }
-        return result;
-    }
-
-    private UnitAction buildUnitAction(String type, JsonArray args, Unit unit,
-                                        int player, GameState gs,
-                                        PhysicalGameState pgs, int mapWidth) {
-        switch (type) {
-            case "move": {
-                if (args.size() < 2) return null;
-                int tx = args.get(0).getAsInt(), ty = args.get(1).getAsInt();
-                UnitAction mv = pf.findPathToAdjacentPosition(unit,
-                        tx + ty * mapWidth, gs, null);
-                return mv == null ? null : new UnitAction(UnitAction.TYPE_MOVE, mv.getDirection());
-            }
-            case "attack": {
-                if (args.size() < 2) return null;
-                int tx = args.get(0).getAsInt(), ty = args.get(1).getAsInt();
-                Unit target = pgs.getUnitAt(tx, ty);
-                if (target == null || target.getPlayer() == player) return null;
-                int d = Math.abs(unit.getX()-tx) + Math.abs(unit.getY()-ty);
-                if (d <= unit.getType().attackRange)
-                    return new UnitAction(UnitAction.TYPE_ATTACK_LOCATION, tx + ty * mapWidth);
-                UnitAction mv = pf.findPathToAdjacentPosition(unit, tx + ty * mapWidth, gs, null);
-                return mv == null ? null : new UnitAction(UnitAction.TYPE_MOVE, mv.getDirection());
-            }
-            case "harvest": {
-                if (args.size() < 4) return null;
-                int rx = args.get(0).getAsInt(), ry = args.get(1).getAsInt();
-                int bx = args.get(2).getAsInt(), by = args.get(3).getAsInt();
-                Unit res  = pgs.getUnitAt(rx, ry);
-                Unit base = pgs.getUnitAt(bx, by);
-                if (res == null || base == null || base.getType() != baseType) return null;
-                if (unit.getResources() > 0) {
-                    UnitAction mv = pf.findPathToAdjacentPosition(unit, bx+by*mapWidth, gs, null);
-                    if (mv == null) return null;
-                    boolean adj = Math.abs(unit.getX()-bx)+Math.abs(unit.getY()-by) == 1;
-                    return new UnitAction(adj ? UnitAction.TYPE_RETURN : UnitAction.TYPE_MOVE,
-                            mv.getDirection());
-                } else {
-                    UnitAction mv = pf.findPathToAdjacentPosition(unit, rx+ry*mapWidth, gs, null);
-                    if (mv == null) return null;
-                    boolean adj = Math.abs(unit.getX()-rx)+Math.abs(unit.getY()-ry) == 1;
-                    return new UnitAction(adj ? UnitAction.TYPE_HARVEST : UnitAction.TYPE_MOVE,
-                            mv.getDirection());
-                }
-            }
-            case "train": {
-                String name = args.size() > 0 ? args.get(0).getAsString().toLowerCase() : "";
-                UnitType tt = null;
-                if (unit.getType() == baseType && "worker".equals(name)) tt = workerType;
-                else if (unit.getType() == barracksType) {
-                    if ("light".equals(name))  tt = lightType;
-                    if ("heavy".equals(name))  tt = heavyType;
-                    if ("ranged".equals(name)) tt = rangedType;
-                }
-                if (tt == null || gs.getPlayer(player).getResources() < tt.cost) return null;
-                for (int dir = 0; dir < 4; dir++) {
-                    int nx = unit.getX()+UnitAction.DIRECTION_OFFSET_X[dir];
-                    int ny = unit.getY()+UnitAction.DIRECTION_OFFSET_Y[dir];
-                    if (nx<0||ny<0||nx>=pgs.getWidth()||ny>=pgs.getHeight()) continue;
-                    if (pgs.getUnitAt(nx,ny) != null) continue;
-                    return new UnitAction(UnitAction.TYPE_PRODUCE, dir, tt);
-                }
-                return null;
-            }
-            case "build": {
-                if (args.size() < 2) return null;
-                int bx = args.get(0).getAsInt(), by = args.get(1).getAsInt();
-                if (gs.getPlayer(player).getResources() < barracksType.cost) return null;
-                UnitAction mv = pf.findPathToAdjacentPosition(unit, bx+by*mapWidth, gs, null);
-                if (mv == null) return null;
-                boolean adj = Math.abs(unit.getX()-bx)+Math.abs(unit.getY()-by) == 1;
-                return new UnitAction(adj ? UnitAction.TYPE_PRODUCE : UnitAction.TYPE_MOVE,
-                        adj ? mv.getDirection() : mv.getDirection(),
-                        adj ? barracksType : null);
-            }
+            System.err.println("[yebot] Parse macro error: " + ex.getMessage());
         }
         return null;
     }
 
-    // ── HTTP call ─────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  LLM HTTP CALL
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private String callLLM(String stateText) {
         try {
@@ -395,8 +731,8 @@ public class yebot extends AbstractionLayerAI {
             JsonObject fmt = new JsonObject();
             fmt.addProperty("type", "json_object");
             req.add("response_format", fmt);
-            req.addProperty("temperature", 0.2);
-            req.addProperty("max_tokens", 512);
+            req.addProperty("temperature", 0.3);
+            req.addProperty("max_tokens", 256);
 
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(req.toString().getBytes(StandardCharsets.UTF_8));
@@ -421,12 +757,22 @@ public class yebot extends AbstractionLayerAI {
         return "{}";
     }
 
-    // ── Utility ───────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  UTILITY
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private boolean canAfford(int player, GameState gs, UnitType ut) {
+        return gs.getPlayer(player).getResources() - resourcesUsed >= ut.cost;
+    }
+
+    private int manhattanDist(Unit a, Unit b) {
+        return Math.abs(a.getX() - b.getX()) + Math.abs(a.getY() - b.getY());
+    }
 
     private Unit nearest(Unit src, List<Unit> units) {
         Unit best = null; int bestD = Integer.MAX_VALUE;
         for (Unit u : units) {
-            int d = Math.abs(src.getX()-u.getX()) + Math.abs(src.getY()-u.getY());
+            int d = manhattanDist(src, u);
             if (d < bestD) { bestD = d; best = u; }
         }
         return best;
