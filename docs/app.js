@@ -217,6 +217,19 @@
         return '';
     }
 
+    function mapScoreCell(mapScores, label) {
+        if (!mapScores || !mapScores[label]) return '<td class="score-cell">--</td>';
+        var ms = mapScores[label];
+        var score = ms.score != null ? ms.score : '?';
+        var grade = ms.grade || '';
+        return '<td class="score-cell">' + score + ' ' + gradeBadge(grade) + '</td>';
+    }
+
+    function getMapScore(mapScores, label) {
+        if (!mapScores || !mapScores[label]) return null;
+        return mapScores[label].score != null ? mapScores[label].score : null;
+    }
+
     function renderMapScoresSection(mapScores) {
         if (!mapScores || typeof mapScores !== 'object') return '';
         var labels = Object.keys(mapScores);
@@ -366,6 +379,8 @@
             html += '<td class="score-cell">' + entry.score + '</td>';
             html += '<td>' + gradeBadge(entry.grade) + '</td>';
             html += '<td class="date-cell">' + formatDateWithAge(entry.last_updated || entry.date) + '</td>';
+            html += mapScoreCell(entry.map_scores, '8x8');
+            html += mapScoreCell(entry.map_scores, '16x16');
             for (var k = 0; k < ANCHORS.length; k++) {
                 html += opponentCell(entry.opponents, ANCHORS[k]);
             }
@@ -486,7 +501,7 @@
         var entries = [];
         for (var i = 0; i < historyEntries.length; i++) {
             var e = historyEntries[i];
-            if (!matchesSearch(e, filters.search, ['name', 'grade', 'source', 'map'])) continue;
+            if (!matchesSearch(e, filters.search, ['name', 'grade', 'source'])) continue;
             if (!matchesDateRange(e._sortData.date, filters.dateFrom, filters.dateTo)) continue;
             entries.push(e);
         }
@@ -508,7 +523,8 @@
                 '<td class="score-cell">' + entry.score + '</td>' +
                 '<td>' + gradeBadge(entry.grade) + '</td>' +
                 '<td><span class="source-badge">' + escapeHtml(src) + '</span></td>' +
-                '<td>' + escapeHtml(entry.map || '--') + '</td>';
+                mapScoreCell(entry.map_scores, '8x8') +
+                mapScoreCell(entry.map_scores, '16x16');
             (function (idx) {
                 row.addEventListener('click', function () {
                     toggleDetail('history-table', idx, filteredRef);
@@ -618,7 +634,9 @@
                         name: lb[i].display_name || '',
                         score: lb[i].score,
                         grade: lb[i].grade || 'F',
-                        date: lb[i].last_updated || lb[i].date || ''
+                        date: lb[i].last_updated || lb[i].date || '',
+                        score_8x8: getMapScore(lb[i].map_scores, '8x8'),
+                        score_16x16: getMapScore(lb[i].map_scores, '16x16')
                     }
                 });
             }
@@ -657,7 +675,8 @@
                         score: history[hi].score,
                         grade: history[hi].grade || 'F',
                         source: history[hi].source || 'unknown',
-                        map: history[hi].map || ''
+                        score_8x8: getMapScore(history[hi].map_scores, '8x8'),
+                        score_16x16: getMapScore(history[hi].map_scores, '16x16')
                     }
                 });
             }

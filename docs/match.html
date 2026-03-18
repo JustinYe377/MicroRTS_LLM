@@ -357,6 +357,7 @@
         .history-entry:last-child { border-bottom: none; }
         .history-result { font-weight: 600; min-width: 5rem; }
         .history-agents { color: var(--text-secondary); flex: 1; }
+        .history-map { color: var(--text-muted); font-size: 0.75rem; min-width: 6rem; padding: 0 0.5rem; white-space: nowrap; }
         .history-meta { color: var(--text-muted); font-size: 0.75rem; text-align: right; white-space: nowrap; }
         .history-meta .history-ticks { display: block; }
         .history-meta .history-ts { display: block; font-size: 0.7rem; }
@@ -1063,9 +1064,11 @@ python3 tournament/match_server.py --port 8080</code></pre>
                 else if (m.status === 'timeout') { resultText = 'Timeout'; }
                 var ticks = m.final_tick != null ? m.final_tick + ' ticks' : (m.status === 'error' ? 'error' : '--');
                 var ts = m._timestamp ? formatTime(m._timestamp) : '';
+                var mapLabel = (m.map || '').replace('maps/', '').replace('.xml', '').replace(/\//g, '/');
                 html += '<div class="history-entry" data-history-idx="' + i + '">' +
                     '<span class="history-result ' + resultCls + '">' + resultText + '</span>' +
                     '<span class="history-agents">' + escapeHtml(m.ai1_name) + ' vs ' + escapeHtml(m.ai2_name) + '</span>' +
+                    '<span class="history-map">' + escapeHtml(mapLabel) + '</span>' +
                     '<span class="history-meta"><span class="history-ticks">' + ticks + '</span><span class="history-ts">' + ts + '</span></span>' +
                     '</div>';
             }

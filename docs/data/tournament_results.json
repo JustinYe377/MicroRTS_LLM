@@ -1,5 +1,5 @@
 {
-  "generated": "2026-03-17T23:59:20.396397",
+  "generated": "2026-03-18T00:02:05.702709",
   "anchors": [
     "RandomBiasedAI",
     "HeavyRush",
@@ -90,7 +90,13 @@
           "weighted_points": 24.0
         }
       },
-      "last_updated": "2026-02-04T18:08:17.927884"
+      "last_updated": "2026-02-04T18:08:17.927884",
+      "map_scores": {
+        "8x8": {
+          "score": 119.0,
+          "grade": "A+"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -150,7 +156,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-05T09:04:51.214984"
+      "last_updated": "2026-02-05T09:04:51.214984",
+      "map_scores": {
+        "8x8": {
+          "score": 96.0,
+          "grade": "A+"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -210,7 +222,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-03-17T22:06:40.585032"
+      "last_updated": "2026-03-17T22:06:40.585032",
+      "map_scores": {
+        "8x8": {
+          "score": 89.0,
+          "grade": "A"
+        }
+      }
     },
     {
       "source": "tournament",
@@ -382,7 +400,12 @@
       "date": "2026-03-17T20:35:04.823048",
       "map": "maps/8x8/basesWorkers8x8.xml",
       "maps": [],
-      "map_scores": {},
+      "map_scores": {
+        "8x8": {
+          "score": 79.0,
+          "grade": "B"
+        }
+      },
       "games_per_matchup": 1,
       "opponents": {
         "RandomBiasedAI": {
@@ -474,7 +497,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-04T17:16:58.434397"
+      "last_updated": "2026-02-04T17:16:58.434397",
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -527,7 +556,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-04T18:08:17.927884"
+      "last_updated": "2026-02-04T18:08:17.927884",
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -580,7 +615,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-05T04:56:29.979214"
+      "last_updated": "2026-02-05T04:56:29.979214",
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
+      }
     },
     {
       "source": "tournament",
@@ -597,7 +638,12 @@
       "date": "2026-03-17T20:35:04.823048",
       "map": "maps/8x8/basesWorkers8x8.xml",
       "maps": [],
-      "map_scores": {},
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
+      },
       "games_per_matchup": 1,
       "opponents": {
         "RandomBiasedAI": {
@@ -653,7 +699,12 @@
       "date": "2026-03-17T20:35:04.823048",
       "map": "maps/8x8/basesWorkers8x8.xml",
       "maps": [],
-      "map_scores": {},
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
+      },
       "games_per_matchup": 1,
       "opponents": {
         "RandomBiasedAI": {
@@ -738,7 +789,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-04T17:16:58.434397"
+      "last_updated": "2026-02-04T17:16:58.434397",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -784,7 +841,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-05T04:53:52.671550"
+      "last_updated": "2026-02-05T04:53:52.671550",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -830,7 +893,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-05T04:53:52.671550"
+      "last_updated": "2026-02-05T04:53:52.671550",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -876,7 +945,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-05T04:56:29.979214"
+      "last_updated": "2026-02-05T04:56:29.979214",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -922,7 +997,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-05T04:58:17.079253"
+      "last_updated": "2026-02-05T04:58:17.079253",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -968,7 +1049,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-05T09:04:51.214984"
+      "last_updated": "2026-02-05T09:04:51.214984",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1014,7 +1101,13 @@
           "weighted_points": 0
         }
       },
-      "last_updated": "2026-03-17T22:06:40.585032"
+      "last_updated": "2026-03-17T22:06:40.585032",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1060,7 +1153,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-03-17T22:06:40.585032"
+      "last_updated": "2026-03-17T22:06:40.585032",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1106,7 +1205,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-03-17T22:06:40.585032"
+      "last_updated": "2026-03-17T22:06:40.585032",
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "tournament",
@@ -1123,7 +1228,12 @@
       "date": "2026-03-17T20:35:04.823048",
       "map": "maps/8x8/basesWorkers8x8.xml",
       "maps": [],
-      "map_scores": {},
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      },
       "games_per_matchup": 1,
       "opponents": {
         "RandomBiasedAI": {
@@ -1172,7 +1282,12 @@
       "date": "2026-03-17T20:35:04.823048",
       "map": "maps/8x8/basesWorkers8x8.xml",
       "maps": [],
-      "map_scores": {},
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
+      },
       "games_per_matchup": 1,
       "opponents": {
         "RandomBiasedAI": {
@@ -1232,7 +1347,13 @@
           "losses": 0
         }
       },
-      "last_updated": "2026-02-03T05:48:36.310330"
+      "last_updated": "2026-02-03T05:48:36.310330",
+      "map_scores": {
+        "8x8": {
+          "score": 50.0,
+          "grade": "D"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1271,7 +1392,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-05T04:58:17.079253"
+      "last_updated": "2026-02-05T04:58:17.079253",
+      "map_scores": {
+        "8x8": {
+          "score": 36.0,
+          "grade": "F"
+        }
+      }
     },
     {
       "source": "tournament",
@@ -1288,7 +1415,12 @@
       "date": "2026-02-24T21:40:09.990203",
       "map": "maps/8x8/basesWorkers8x8.xml",
       "maps": [],
-      "map_scores": {},
+      "map_scores": {
+        "8x8": {
+          "score": 35.0,
+          "grade": "F"
+        }
+      },
       "games_per_matchup": 1,
       "opponents": {
         "RandomBiasedAI": {
@@ -1345,7 +1477,13 @@
           "weighted_points": 10.0
         }
       },
-      "last_updated": "2026-03-05T22:24:38.903421"
+      "last_updated": "2026-03-05T22:24:38.903421",
+      "map_scores": {
+        "8x8": {
+          "score": 22.0,
+          "grade": "F"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1370,7 +1508,13 @@
           "weighted_points": 5.0
         }
       },
-      "last_updated": "2026-02-04T17:16:58.434397"
+      "last_updated": "2026-02-04T17:16:58.434397",
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1395,7 +1539,13 @@
           "weighted_points": 5.0
         }
       },
-      "last_updated": "2026-03-17T22:06:40.585032"
+      "last_updated": "2026-03-17T22:06:40.585032",
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1423,7 +1573,13 @@
           "losses": 1
         }
       },
-      "last_updated": "2026-02-03T05:48:36.310330"
+      "last_updated": "2026-02-03T05:48:36.310330",
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1451,7 +1607,13 @@
           "losses": 1
         }
       },
-      "last_updated": "2026-02-03T05:48:36.310330"
+      "last_updated": "2026-02-03T05:48:36.310330",
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1476,7 +1638,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-04T17:16:58.434397"
+      "last_updated": "2026-02-04T17:16:58.434397",
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
+        }
+      }
     },
     {
       "source": "benchmark",
@@ -1501,7 +1669,13 @@
           "weighted_points": 0.0
         }
       },
-      "last_updated": "2026-02-04T17:16:58.434397"
+      "last_updated": "2026-02-04T17:16:58.434397",
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
+        }
+      }
     }
   ],
   "history": [
@@ -2757,6 +2931,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 89.0,
+          "grade": "A"
+        }
       }
     },
     {
@@ -2802,6 +2982,12 @@
           "losses": 0,
           "avg_game_score": 0.5,
           "weighted_points": 10.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 79.0,
+          "grade": "B"
         }
       }
     },
@@ -2849,6 +3035,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
       }
     },
     {
@@ -2895,6 +3087,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
       }
     },
     {
@@ -2933,6 +3131,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -2973,6 +3177,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3012,6 +3222,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3050,6 +3266,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -3090,6 +3312,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3129,6 +3357,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3147,6 +3381,12 @@
           "avg_game_score": 0.5,
           "weighted_points": 5.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -3164,6 +3404,12 @@
           "losses": 0,
           "avg_game_score": 0.5,
           "weighted_points": 5.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
         }
       }
     },
@@ -3204,6 +3450,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3228,6 +3480,12 @@
           "losses": 0,
           "avg_game_score": 0.5,
           "weighted_points": 10.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 22.0,
+          "grade": "F"
         }
       }
     },
@@ -3268,6 +3526,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3321,6 +3585,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 89.0,
+          "grade": "A"
+        }
       }
     },
     {
@@ -3366,6 +3636,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
         }
       }
     },
@@ -3406,6 +3682,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3444,6 +3726,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -3484,6 +3772,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3509,6 +3803,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 11.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -3526,6 +3826,12 @@
           "losses": 0,
           "avg_game_score": 0.5,
           "weighted_points": 5.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
         }
       }
     },
@@ -3545,6 +3851,12 @@
           "avg_game_score": 0.5,
           "weighted_points": 5.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -3563,6 +3875,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -3580,6 +3898,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
         }
       }
     },
@@ -3634,6 +3958,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 89.0,
+          "grade": "A"
+        }
       }
     },
     {
@@ -3679,6 +4009,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
         }
       }
     },
@@ -3719,6 +4055,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3757,6 +4099,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -3797,6 +4145,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3836,6 +4190,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -3861,6 +4221,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 11.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -3878,6 +4244,12 @@
           "losses": 0,
           "avg_game_score": 0.5,
           "weighted_points": 5.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
         }
       }
     },
@@ -3897,6 +4269,12 @@
           "avg_game_score": 0.5,
           "weighted_points": 5.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -3915,6 +4293,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -3932,6 +4316,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
         }
       }
     },
@@ -3951,6 +4341,12 @@
           "avg_game_score": 0.5,
           "weighted_points": 5.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -4004,6 +4400,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 89.0,
+          "grade": "A"
+        }
       }
     },
     {
@@ -4043,6 +4445,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -4081,6 +4489,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -4107,6 +4521,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 12.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -4125,6 +4545,12 @@
           "avg_game_score": 0.5,
           "weighted_points": 5.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -4142,6 +4568,12 @@
           "losses": 0,
           "avg_game_score": 0.5,
           "weighted_points": 5.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
         }
       }
     },
@@ -4182,6 +4614,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -4220,6 +4658,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -4253,6 +4697,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 35.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -4270,6 +4720,12 @@
           "losses": 0,
           "avg_game_score": 0.5,
           "weighted_points": 5.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
         }
       }
     },
@@ -4289,6 +4745,12 @@
           "avg_game_score": 0.5,
           "weighted_points": 5.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -4328,6 +4790,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -4366,6 +4834,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -4385,6 +4859,12 @@
           "avg_game_score": 0.5,
           "weighted_points": 5.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -4402,6 +4882,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
         }
       }
     },
@@ -4442,6 +4928,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -4480,6 +4972,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -4534,6 +5032,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 96.0,
+          "grade": "A+"
+        }
       }
     },
     {
@@ -4572,6 +5076,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -4612,6 +5122,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -4643,6 +5159,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 36.0,
+          "grade": "F"
         }
       }
     },
@@ -4690,6 +5212,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
       }
     },
     {
@@ -4728,6 +5256,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -4768,6 +5302,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -4806,6 +5346,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
         }
       }
     },
@@ -4860,6 +5406,12 @@
           "avg_game_score": 1.2,
           "weighted_points": 24.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 119.0,
+          "grade": "A+"
+        }
       }
     },
     {
@@ -4905,6 +5457,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
         }
       }
     },
@@ -4952,6 +5510,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 69.0,
+          "grade": "C"
+        }
       }
     },
     {
@@ -4991,6 +5555,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 54.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -5008,6 +5578,12 @@
           "losses": 0,
           "avg_game_score": 0.5,
           "weighted_points": 5.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 5.0,
+          "grade": "F"
         }
       }
     },
@@ -5027,6 +5603,12 @@
           "avg_game_score": 0.0,
           "weighted_points": 0.0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -5044,6 +5626,12 @@
           "losses": 1,
           "avg_game_score": 0.0,
           "weighted_points": 0.0
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
         }
       }
     },
@@ -5066,6 +5654,12 @@
           "draws": 1,
           "losses": 0
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 50.0,
+          "grade": "D"
+        }
       }
     },
     {
@@ -5087,6 +5681,12 @@
           "draws": 0,
           "losses": 1
         }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
+        }
       }
     },
     {
@@ -5107,6 +5707,12 @@
           "wins": 0,
           "draws": 0,
           "losses": 1
+        }
+      },
+      "map_scores": {
+        "8x8": {
+          "score": 0.0,
+          "grade": "F"
         }
       }
     }

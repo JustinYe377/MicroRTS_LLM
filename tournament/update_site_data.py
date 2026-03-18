@@ -132,9 +132,15 @@ def build_leaderboard(entries):
         if key not in latest_date or entry_date > latest_date[key]:
             latest_date[key] = entry_date
 
-    # Add last_updated to each leaderboard entry
+    # Add last_updated and synthesize map_scores for single-map entries
     for key, entry in best.items():
         entry["last_updated"] = latest_date.get(key, entry.get("date", ""))
+        if not entry.get("map_scores"):
+            raw_map = entry.get("map", "")
+            if "8x8" in raw_map:
+                entry["map_scores"] = {"8x8": {"score": entry["score"], "grade": entry["grade"]}}
+            elif "16x16" in raw_map:
+                entry["map_scores"] = {"16x16": {"score": entry["score"], "grade": entry["grade"]}}
 
     return sorted(best.values(), key=lambda x: x["score"], reverse=True)
 
@@ -156,6 +162,13 @@ def build_history(entries):
         }
         if entry.get("map_scores"):
             h["map_scores"] = entry["map_scores"]
+        else:
+            # Synthesize map_scores for single-map entries (e.g. old benchmarks)
+            raw_map = entry.get("map", "")
+            if "8x8" in raw_map:
+                h["map_scores"] = {"8x8": {"score": entry["score"], "grade": entry["grade"]}}
+            elif "16x16" in raw_map:
+                h["map_scores"] = {"16x16": {"score": entry["score"], "grade": entry["grade"]}}
         history.append(h)
     return history
 
