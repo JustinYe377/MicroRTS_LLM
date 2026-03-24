@@ -1,24 +1,21 @@
 /*
- * AlliBot (Search+LLM + Rule Fallback)
+ * AlliBot (LLM-guided MCTS + rule fallback)
  *
- * How this agent works:
- * 1) Primary policy: use LLMInformedMCTS (Search+LLM) to choose actions.
- *    - Search: Monte Carlo Tree Search explores tactical futures.
- *    - LLM: policy priors and strategic goals bias the search.
- * 2) Safety policy: if Search+LLM fails or returns no concrete action,
- *    immediately fall back to original rule-based behavior in this file.
+ * Flow (see getAction around line 1558):
+ *  - First try LLMInformedMCTS via trySearchLLMAction() (line 1487; call at ~1560).
+ *  - Otherwise fall back to getRuleBasedAction() (line 1514; call at ~1565).
  *
- * General Flow:
- * 1) Game calls getAction() at ~1424.
- * 2) Try Search+LLM first via trySearchLLMAction() at ~1353.
- * 3) If Search+LLM returns a real action, use it immediately.
- * 4) If search is disabled, skipped, fails, or returns no real move, fallback to getRuleBasedAction() at ~1380.
- * 5) Fallback runs the original pre-LLM rule-based logic.
+ * Anti-rush focus (key methods):
+ *  - Rush detection up to tick 600 + 8-tile base threat: isWorkerRush() ~723, baseUnderThreat() ~675.
+ *  - Opening worker rush (first 400 ticks): workerAction() ~778, basesAction() ~944.
+ *  - All-worker defense on rush/threat: workerAction() ~778.
+ *  - Bodyblockers _bb1/_bb2 chosen in init(): init() ~1303, assignments ~1385-1393.
+ *  - Fast defensive barracks drop: buildBracks() ~1173.
+ *  - Emergency worker spam during rush: basesAction() ~944.
  *
- * Recent updates:
- * 1) Removed reflection-based System.getenv() mutation for OLLAMA_* defaults.
- *    OLLAMA_HOST and OLLAMA_MODEL must be provided by environment/config.
- * 2) Added null guard in reset() (~246) before calling _searchAgent.reset().
+ * Production/attack:
+ *  - buildBase() ~1055, buildBracks() ~1173, barracksAction() ~1018.
+ *  - Combat targeting: goCombat() ~644, attackNearby() ~1244/1260/1273.
  */
 
 package ai.abstraction.submissions.allibot;
@@ -111,6 +108,10 @@ public class alli extends AIWithComputationBudget {
     List<Unit> _enemyLights;
     List<Unit> _enemies;
     List<Unit> _enemiesCombat;
+
+    // Reserved bodyblock defenders when facing early worker rushes.
+    Unit _bb1;
+    Unit _bb2;
 
     List<Unit> _all;    
     HashMap<Unit, Integer> _newDmgs;
@@ -678,14 +679,36 @@ public class alli extends AIWithComputationBudget {
         for (Unit enemy : _enemies) {
             if (!enemy.getType().canAttack && enemy.getType() != _utt.getUnitType("Worker"))
                 continue;
-            if (distance(base, enemy) <= 6)
+            int dist = distance(base, enemy);
+            if (dist <= 8)
                 return true;
         }
         return false;
     }
+
+    int closestEnemyWorkerDistanceToBase() {
+        if (_bases.isEmpty() || _enemyWorkers.isEmpty())
+            return Integer.MAX_VALUE;
+        Unit base = _bases.get(0);
+        return _enemyWorkers.stream().mapToInt(w -> distance(base, w)).min().getAsInt();
+    }
+
+    Unit closestEnemyWorkerToBase() {
+        if (_bases.isEmpty() || _enemyWorkers.isEmpty())
+            return null;
+        Unit base = _bases.get(0);
+        return _enemyWorkers.stream().min(Comparator.comparingInt(w -> distance(base, w))).orElse(null);
+    }
+
+    boolean smallMapRushMode() {
+        int area = _pgs.getWidth() * _pgs.getHeight();
+        return area <= 144; // 12x12 or smaller, mirrors CRush's rush trigger
+    }
     
     boolean shouldWorkersAttack() {
-        // Defend sooner: pull workers into combat as soon as the base is threatened.
+        // Defend sooner: pull workers into combat as soon as the base is threatened or we detect a worker rush.
+        if (isWorkerRush())
+            return true;
         if (baseUnderThreat())
             return true;
         if (_pgs.getWidth() <= 12)
@@ -694,6 +717,20 @@ public class alli extends AIWithComputationBudget {
                  _heavies.isEmpty() && _futureHeavies == 0 && _archers.isEmpty())
             return true;
         return false; //todo here
+    }
+    
+    // Detect early worker-only aggression.
+    boolean isWorkerRush() {
+        // GameState exposes the current tick; PhysicalGameState does not.
+        if (_gs != null && _gs.getTime() > 600)
+            return false;
+        int eWorkers = _enemyWorkers.size();
+        int eBarracks = _enemyBarracks.size();
+        int eCombat = _enemyLights.size() + _enemyHeavies.size() + _enemyArchers.size();
+        int distToBase = closestEnemyWorkerDistanceToBase();
+        boolean enemyAlreadyClose = distToBase <= Math.max(6, _pgs.getWidth() / 2);
+        return eBarracks == 0 && eCombat == 0 &&
+               (eWorkers >= 3 || (eWorkers >= 2 && enemyAlreadyClose));
     }
     
     int harvestScore(Unit worker, List<Unit> basesRemain) {
@@ -741,6 +778,70 @@ public class alli extends AIWithComputationBudget {
     void workerAction() {
         List<Unit> ws = new ArrayList<>(_workers);
         List<Unit> bs = new ArrayList<>(_bases);
+
+        // CRush-inspired early aggression on small maps: all workers rush enemy base/workers before 400 ticks
+        if (smallMapRushMode() && _gs.getTime() < 400 && !_workers.isEmpty()) {
+            _memHarvesters.clear();
+            Unit target = !_enemyBases.isEmpty() ? _enemyBases.get(0) : closestEnemyWorkerToBase();
+            if (target == null && !_enemies.isEmpty())
+                target = _enemies.get(0);
+            for (Unit w : _workers) {
+                if (busy(w))
+                    continue;
+                if (target != null) {
+                    if (distance(w, target) <= 1)
+                        attackNearby(w);
+                    else
+                        moveTowards(w, toPos(target));
+                }
+            }
+            return;
+        }
+
+        boolean rushMode = isWorkerRush() || baseUnderThreat();
+        if (rushMode) {
+            _memHarvesters.clear();
+            if (_bases.isEmpty()) {
+                goCombat(_workers, 1);
+                return;
+            }
+            Unit base = _bases.get(0);
+            // Prioritize killing the closest enemy worker to our base.
+            Unit primaryTarget = closestEnemyWorkerToBase();
+            // Assign ALL workers to defense; base-race was losing.
+            List<Unit> sorted = new ArrayList<>(_workers);
+            sorted.sort(Comparator.comparingInt(w -> distance(base, w)));
+            for (Unit w : sorted) {
+                if (busy(w))
+                    continue;
+                Unit target = primaryTarget != null ? primaryTarget : closest(w, _enemies);
+                if (target != null) {
+                    if (distance(w, target) <= 1)
+                        attackNearby(w);
+                    else
+                        moveTowards(w, toPos(target));
+                } else {
+                    // no target: hold a ring around the base
+                    moveTowards(w, toPos(base));
+                }
+            }
+            return;
+        }
+        
+        // Keep two closest workers on defense when we detect a worker rush.
+        if (isWorkerRush()) {
+            _memHarvesters.clear();
+            if (_bb1 != null) {
+                ws.remove(_bb1);
+                if (!busy(_bb1))
+                    goCombat(Collections.singletonList(_bb1), 20);
+            }
+            if (_bb2 != null) {
+                ws.remove(_bb2);
+                if (!busy(_bb2))
+                    goCombat(Collections.singletonList(_bb2), 20);
+            }
+        }
         
         HashMap<Unit, Integer> baseHarCount = new HashMap<>();
         
@@ -846,6 +947,14 @@ public class alli extends AIWithComputationBudget {
         for (Unit base : _bases) {
             if(busy(base))
                 continue;
+            if (smallMapRushMode() && _gs.getTime() < 400) {
+                produceWherever(base, _utt.getUnitType("Worker"));
+                continue;
+            }
+            if (isWorkerRush() || baseUnderThreat()) {
+                produceWherever(base, _utt.getUnitType("Worker"));
+                continue;
+            }
             int workerPerBase = workerPerBase(base);
             boolean onlyOption = _resources.isEmpty() && ((_p.getResources() - _resourcesUsed) == 1); //todo some workers carry...
             if(onlyOption) {
@@ -1073,6 +1182,18 @@ public class alli extends AIWithComputationBudget {
         
         if (_workers.isEmpty())
             return;
+
+        // When rushed by workers, drop a fast defensive barracks next to the closest base.
+        if (isWorkerRush()) {
+            Unit w = closest(_bases.get(0), _workers);
+            if (w != null) {
+                for (int dir : _dirs) {
+                    Pos p = futurePos(w.getX(), w.getY(), dir);
+                    if (validForFutureBuild(p) && produce(w, dir, _utt.getUnitType("Barracks")))
+                        return;
+                }
+            }
+        }
         
         List<Pos> pCandidates = new ArrayList<>();
         for (Unit base : _bases) {
@@ -1258,6 +1379,19 @@ public class alli extends AIWithComputationBudget {
                 _enemiesCombat.add(u);
             else if(u.getType().canAttack)
                 _allyCombat.add(u);
+        }
+
+        // Reserve two closest workers to the base for bodyblocking when rushed.
+        _bb1 = null;
+        _bb2 = null;
+        if (!_bases.isEmpty() && !_workers.isEmpty()) {
+            Unit base = _bases.get(0);
+            _bb1 = closest(base, _workers);
+            if (_bb1 != null && _workers.size() > 1) {
+                List<Unit> remaining = new ArrayList<>(_workers);
+                remaining.remove(_bb1);
+                _bb2 = closest(base, remaining);
+            }
         }
         
         _futureBarracks = new ArrayList<>();

@@ -27,9 +27,13 @@ from validate_submission import validate_submission, find_all_submissions
 # Configuration - matches benchmark_arena.py exactly
 CONFIG_FILE = "resources/config.properties"
 RESULTS_DIR = "tournament_results"
-MAX_CYCLES = 1500
-MAP = "maps/8x8/basesWorkers8x8.xml"
 GAME_TIMEOUT = 900  # 15 minutes
+
+# Maps and their cycle limits (agents play on all maps)
+MAPS = [
+    {"path": "maps/8x8/basesWorkers8x8.xml", "label": "8x8", "max_cycles": 1500},
+    {"path": "maps/16x16/basesWorkers16x16.xml", "label": "16x16", "max_cycles": 3000},
+]
 
 # Reference AI anchors - identical to benchmark_arena.py
 ANCHORS = {
@@ -65,23 +69,24 @@ ANCHORS = {
     },
 }
 
-def update_config(ai1, ai2):
-    """Update config.properties with AI settings."""
+def update_config(ai1, ai2, map_path, max_cycles):
+    """Update config.properties with AI and map settings."""
     with open(CONFIG_FILE, 'r') as f:
         content = f.read()
 
     content = re.sub(r'^AI1=.*$', f'AI1={ai1}', content, flags=re.MULTILINE)
     content = re.sub(r'^AI2=.*$', f'AI2={ai2}', content, flags=re.MULTILINE)
-    content = re.sub(r'^max_cycles=.*$', f'max_cycles={MAX_CYCLES}', content, flags=re.MULTILINE)
+    content = re.sub(r'^max_cycles=.*$', f'max_cycles={max_cycles}', content, flags=re.MULTILINE)
+    content = re.sub(r'^map_location=.*$', f'map_location={map_path}', content, flags=re.MULTILINE)
     content = re.sub(r'^headless=.*$', 'headless=true', content, flags=re.MULTILINE)
 
     with open(CONFIG_FILE, 'w') as f:
         f.write(content)
 
 
-def run_game(ai1, ai2, ai1_name="", ai2_name=""):
+def run_game(ai1, ai2, map_info, ai1_name="", ai2_name=""):
     """Run a single game and return result."""
-    update_config(ai1, ai2)
+    update_config(ai1, ai2, map_info["path"], map_info["max_cycles"])
 
     env = os.environ.copy()
     display1 = ai1_name or ai1.split(".")[-1]
@@ -100,13 +105,13 @@ def run_game(ai1, ai2, ai1_name="", ai2_name=""):
         output = result.stdout + result.stderr
     except subprocess.TimeoutExpired:
         print("TIMEOUT")
-        return {"result": "timeout", "ticks": MAX_CYCLES}
+        return {"result": "timeout", "ticks": map_info["max_cycles"]}
     except Exception as e:
         print(f"ERROR: {e}")
         return {"result": "error", "ticks": 0, "error": str(e)}
 
     winner = None
-    ticks = MAX_CYCLES
+    ticks = map_info["max_cycles"]
 
     winner_match = re.search(r'WINNER:\s*(-?\d+)', output)
     if winner_match:
@@ -133,13 +138,13 @@ def run_game(ai1, ai2, ai1_name="", ai2_name=""):
         return {"result": "draw", "ticks": ticks}
 
 
-def calculate_game_score(result, ticks):
+def calculate_game_score(result, ticks, max_cycles):
     """Calculate score for a single game (same as benchmark_arena.py)."""
     if result == "win":
         base = 1.0
-        if ticks < MAX_CYCLES * 0.5:
+        if ticks < max_cycles * 0.5:
             bonus = 0.2
-        elif ticks < MAX_CYCLES * 0.75:
+        elif ticks < max_cycles * 0.75:
             bonus = 0.1
         else:
             bonus = 0.0
@@ -150,7 +155,7 @@ def calculate_game_score(result, ticks):
         return 0.0
 
 
-def calculate_benchmark_score(results):
+def calculate_benchmark_score(results, max_cycles):
     """Calculate final benchmark score 0-100 (same as benchmark_arena.py)."""
     total_score = 0.0
     for anchor_class, anchor_info in ANCHORS.items():
@@ -158,7 +163,7 @@ def calculate_benchmark_score(results):
             games = results[anchor_class]
             if games:
                 avg_score = sum(
-                    calculate_game_score(g["result"], g["ticks"])
+                    calculate_game_score(g["result"], g["ticks"], max_cycles)
                     for g in games
                 ) / len(games)
                 total_score += avg_score * anchor_info["weight"]
@@ -269,7 +274,7 @@ def compile_all():
     return True
 
 
-def opponent_breakdown(reference_games):
+def opponent_breakdown(reference_games, max_cycles):
     """Build per-opponent stats dict."""
     breakdown = {}
     for anchor_class, games in reference_games.items():
@@ -280,7 +285,7 @@ def opponent_breakdown(reference_games):
         draws = sum(1 for g in games if g["result"] == "draw")
         losses = sum(1 for g in games if g["result"] not in ("win", "draw"))
         avg_score = sum(
-            calculate_game_score(g["result"], g["ticks"]) for g in games
+            calculate_game_score(g["result"], g["ticks"], max_cycles) for g in games
         ) / len(games) if games else 0.0
         weighted_pts = round(avg_score * anchor_info["weight"], 1)
         breakdown[anchor_info["name"]] = {
@@ -301,8 +306,7 @@ def run_tournament(games_per_pair=1, skip_h2h=False, submissions_dir="submission
     now = datetime.now()
     timestamp = now.strftime('%Y-%m-%d_%H-%M')
     print(f"Date: {now.strftime('%Y-%m-%d %H:%M')}")
-    print(f"Map: {MAP}")
-    print(f"Max Cycles: {MAX_CYCLES}")
+    print(f"Maps: {', '.join(m['label'] for m in MAPS)}")
     print(f"Games per matchup: {games_per_pair}")
     print()
 
@@ -356,67 +360,86 @@ def run_tournament(games_per_pair=1, skip_h2h=False, submissions_dir="submission
         sys.exit(1)
     print()
 
-    # Phase 1: Each submission vs Reference AIs (single-elimination)
-    print("TOURNAMENT GAMES (single-elimination)")
+    # Phase 1: Each submission vs Reference AIs on ALL maps (single-elimination per map)
+    print("TOURNAMENT GAMES (single-elimination, multi-map)")
     print("-" * 40)
-    print(f"  Elimination order ({len(ANCHORS)} opponents, 100 pts total):")
+    print(f"  Elimination order ({len(ANCHORS)} opponents, 100 pts per map):")
     for i, (_, info) in enumerate(ANCHORS.items(), 1):
         print(f"    {i}. {info['name']} ({info['tier']}): {info['weight']} pts max")
     print()
 
+    # all_results[display_name][map_label] = {"reference_games": {anchor_class: [games]}}
     all_results = {}
-    benchmark_scores = {}
+    # per_map_scores[display_name][map_label] = score
+    per_map_scores = {}
+    # eliminated_at[display_name][map_label] = anchor_name or None
     eliminated_at = {}
+    # combined_scores[display_name] = averaged score
+    combined_scores = {}
 
     for fqcn, info in contestants.items():
         display_name = info["display_name"]
-        all_results[display_name] = {"reference_games": {}}
-        eliminated_at[display_name] = None
-        eliminated = False
+        all_results[display_name] = {}
+        per_map_scores[display_name] = {}
+        eliminated_at[display_name] = {}
 
-        print(f"\n{display_name}:")
+        for map_info in MAPS:
+            map_label = map_info["label"]
+            max_cycles = map_info["max_cycles"]
 
-        for anchor_class, anchor_info in ANCHORS.items():
-            if eliminated:
-                break
+            print(f"\n{display_name} on {map_label} (max_cycles={max_cycles}):")
 
-            all_results[display_name]["reference_games"][anchor_class] = []
+            all_results[display_name][map_label] = {"reference_games": {}}
+            eliminated_at[display_name][map_label] = None
+            eliminated = False
 
-            for game_num in range(games_per_pair):
-                result = run_game(fqcn, anchor_class, display_name, anchor_info["name"])
-                result["game_num"] = game_num + 1
-                result["opponent"] = anchor_info["name"]
-                all_results[display_name]["reference_games"][anchor_class].append(result)
+            for anchor_class, anchor_info in ANCHORS.items():
+                if eliminated:
+                    break
 
-            games = all_results[display_name]["reference_games"][anchor_class]
-            has_win = any(g["result"] == "win" for g in games)
-            if not has_win:
-                eliminated = True
-                eliminated_at[display_name] = anchor_info["name"]
-                print(f"  ** ELIMINATED at {anchor_info['name']} (no win) **")
+                all_results[display_name][map_label]["reference_games"][anchor_class] = []
 
-        if not eliminated:
-            print(f"  ** CLEARED ALL OPPONENTS **")
+                for game_num in range(games_per_pair):
+                    result = run_game(fqcn, anchor_class, map_info, display_name, anchor_info["name"])
+                    result["game_num"] = game_num + 1
+                    result["opponent"] = anchor_info["name"]
+                    all_results[display_name][map_label]["reference_games"][anchor_class].append(result)
 
-        benchmark_scores[display_name] = calculate_benchmark_score(
-            all_results[display_name]["reference_games"]
-        )
+                games = all_results[display_name][map_label]["reference_games"][anchor_class]
+                has_win = any(g["result"] == "win" for g in games)
+                if not has_win:
+                    eliminated = True
+                    eliminated_at[display_name][map_label] = anchor_info["name"]
+                    print(f"  ** ELIMINATED at {anchor_info['name']} (no win) **")
+
+            if not eliminated:
+                print(f"  ** CLEARED ALL OPPONENTS **")
+
+            per_map_scores[display_name][map_label] = calculate_benchmark_score(
+                all_results[display_name][map_label]["reference_games"],
+                max_cycles
+            )
+
+        # Combined score = average across maps
+        map_scores = list(per_map_scores[display_name].values())
+        combined_scores[display_name] = round(sum(map_scores) / len(map_scores), 1)
 
     print()
 
-    # Phase 2: Head-to-head (optional)
+    # Phase 2: Head-to-head on first map (optional)
     h2h_results = []
     if not skip_h2h and len(contestants) > 1:
-        print("HEAD-TO-HEAD GAMES (supplementary)")
+        print("HEAD-TO-HEAD GAMES (supplementary, 8x8)")
         print("-" * 40)
 
+        h2h_map = MAPS[0]
         fqcn_list = list(contestants.keys())
         for i, fqcn1 in enumerate(fqcn_list):
             for fqcn2 in fqcn_list[i+1:]:
                 name1 = contestants[fqcn1]["display_name"]
                 name2 = contestants[fqcn2]["display_name"]
                 for _ in range(games_per_pair):
-                    result = run_game(fqcn1, fqcn2, name1, name2)
+                    result = run_game(fqcn1, fqcn2, h2h_map, name1, name2)
                     result["player0"] = name1
                     result["player1"] = name2
                     h2h_results.append(result)
@@ -428,16 +451,24 @@ def run_tournament(games_per_pair=1, skip_h2h=False, submissions_dir="submission
     print("=" * 60)
     print()
 
-    sorted_scores = sorted(benchmark_scores.items(), key=lambda x: x[1], reverse=True)
+    # Per-map scores header
+    map_labels = [m["label"] for m in MAPS]
+    header = f"{'Rank':<6}{'Team':<25}"
+    for ml in map_labels:
+        header += f"{ml:<10}"
+    header += f"{'Combined':<10}{'Grade':<8}"
+    print(header)
+    print("-" * (53 + 10 * len(map_labels)))
 
-    print(f"{'Rank':<6}{'Team':<30}{'Score':<10}{'Grade':<8}{'Eliminated at'}")
-    print("-" * 70)
+    sorted_scores = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
 
     for rank, (name, score) in enumerate(sorted_scores, 1):
         grade = score_to_grade(score)
-        elim = eliminated_at.get(name)
-        elim_str = elim if elim else "-- cleared all --"
-        print(f"{rank:<6}{name:<30}{score:<10}{grade:<8}{elim_str}")
+        row = f"{rank:<6}{name:<25}"
+        for ml in map_labels:
+            row += f"{per_map_scores[name][ml]:<10}"
+        row += f"{score:<10}{grade:<8}"
+        print(row)
 
     print()
 
@@ -447,20 +478,52 @@ def run_tournament(games_per_pair=1, skip_h2h=False, submissions_dir="submission
     # Per-team breakdown
     team_results = []
     for name, score in sorted_scores:
-        bd = opponent_breakdown(all_results[name]["reference_games"])
         # Find metadata
         meta = None
-        for fqcn, info in contestants.items():
-            if info["display_name"] == name:
-                meta = info["metadata"]
-                break
-
-        # Find the fqcn for this team
         team_fqcn = ""
         for fqcn, info in contestants.items():
             if info["display_name"] == name:
+                meta = info["metadata"]
                 team_fqcn = fqcn
                 break
+
+        # Build per-map detail
+        map_details = {}
+        # Also build combined opponents breakdown (average across maps)
+        combined_opponents = {}
+        for map_info in MAPS:
+            ml = map_info["label"]
+            ref_games = all_results[name][ml]["reference_games"]
+            bd = opponent_breakdown(ref_games, map_info["max_cycles"])
+            map_details[ml] = {
+                "map": map_info["path"],
+                "max_cycles": map_info["max_cycles"],
+                "score": per_map_scores[name][ml],
+                "grade": score_to_grade(per_map_scores[name][ml]),
+                "eliminated_at": eliminated_at[name][ml],
+                "opponents": bd
+            }
+            # Accumulate for combined opponents
+            for opp_name, opp_data in bd.items():
+                if opp_name not in combined_opponents:
+                    combined_opponents[opp_name] = {
+                        "wins": 0, "draws": 0, "losses": 0,
+                        "weighted_points": 0.0, "avg_game_score": 0.0, "_count": 0
+                    }
+                combined_opponents[opp_name]["wins"] += opp_data["wins"]
+                combined_opponents[opp_name]["draws"] += opp_data["draws"]
+                combined_opponents[opp_name]["losses"] += opp_data["losses"]
+                combined_opponents[opp_name]["weighted_points"] += opp_data["weighted_points"]
+                combined_opponents[opp_name]["avg_game_score"] += opp_data["avg_game_score"]
+                combined_opponents[opp_name]["_count"] += 1
+
+        # Average combined opponent stats
+        for opp_name in combined_opponents:
+            c = combined_opponents[opp_name].pop("_count")
+            combined_opponents[opp_name]["weighted_points"] = round(
+                combined_opponents[opp_name]["weighted_points"] / c, 1)
+            combined_opponents[opp_name]["avg_game_score"] = round(
+                combined_opponents[opp_name]["avg_game_score"] / c, 3)
 
         team_results.append({
             "team_name": meta["team_name"] if meta else name,
@@ -470,20 +533,19 @@ def run_tournament(games_per_pair=1, skip_h2h=False, submissions_dir="submission
             "model_name": meta.get("model_name", "unknown") if meta else "unknown",
             "score": score,
             "grade": score_to_grade(score),
-            "eliminated_at": eliminated_at.get(name),
-            "opponents": bd,
+            "opponents": combined_opponents,
+            "map_scores": map_details,
             "date": now.isoformat(),
-            "map": MAP,
+            "maps": [m["path"] for m in MAPS],
             "games_per_matchup": games_per_pair
         })
 
     tournament_data = {
-        "version": "1.0",
-        "format": "single-elimination",
+        "version": "2.0",
+        "format": "single-elimination-multimap",
         "date": now.isoformat(),
         "config": {
-            "map": MAP,
-            "max_cycles": MAX_CYCLES,
+            "maps": [{"path": m["path"], "label": m["label"], "max_cycles": m["max_cycles"]} for m in MAPS],
             "games_per_matchup": games_per_pair
         },
         "anchors": {
