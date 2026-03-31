@@ -1,21 +1,25 @@
 /*
  * AlliBot (LLM-guided MCTS + rule fallback)
  *
- * Flow (see getAction around line 1558):
- *  - First try LLMInformedMCTS via trySearchLLMAction() (line 1487; call at ~1560).
- *  - Otherwise fall back to getRuleBasedAction() (line 1514; call at ~1565).
+ * Flow (getAction 1666):
+ *  - trySearchLLMAction() (1595) first; falls back to getRuleBasedAction() (1622).
+ *  - Rule path calls: attackNearby() (1381), buildBracks() (1281), buildBase() (1163),
+ *    barracksAction() (1126), basesAction() (1052), workerAction() (886), then goCombat() (710).
  *
- * Anti-rush focus (key methods):
- *  - Rush detection up to tick 600 + 8-tile base threat: isWorkerRush() ~723, baseUnderThreat() ~675.
- *  - Opening worker rush (first 400 ticks): workerAction() ~778, basesAction() ~944.
- *  - All-worker defense on rush/threat: workerAction() ~778.
- *  - Bodyblockers _bb1/_bb2 chosen in init(): init() ~1303, assignments ~1385-1393.
- *  - Fast defensive barracks drop: buildBracks() ~1173.
- *  - Emergency worker spam during rush: basesAction() ~944.
+ * Defense / anti-rush:
+ *  - Rush detector isWorkerRush() (831) + baseUnderThreat() (741) active to tick 600.
+ *  - Early worker rush/defense handled in workerAction() (886) and basesAction() (1052);
+ *    bodyblockers picked in init() (1411).
  *
- * Production/attack:
- *  - buildBase() ~1055, buildBracks() ~1173, barracksAction() ~1018.
- *  - Combat targeting: goCombat() ~644, attackNearby() ~1244/1260/1273.
+ * Economy / production:
+ *  - harvesterPerBase() (868) scales workers per base by map size; small-map rush in workerAction() before tick 400.
+ *  - buildBracks() (1281) for fast barracks; buildBase() (1163).
+ *
+ * Combat targeting:
+ *  - goCombat() (710) chooses targets; attackNearby() overloads (1352/1368/1381) handle close fights.
+ * 
+ * SARSA macro (USE_SARSA) influences worker attack via shouldWorkersAttack() (804) when enabled.
+ * 
  */
 
 package ai.abstraction.submissions.allibot;
@@ -32,6 +36,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Random;
 import rts.GameState;
 import rts.PhysicalGameState;
 import static rts.PhysicalGameState.TERRAIN_WALL;
@@ -132,6 +137,10 @@ public class alli extends AIWithComputationBudget {
     // Tracks when search last ran so interval control is easy to reason about.
     private int _lastSearchTick = -9999;
 
+    // Optional on-policy SARSA learner (macro: send workers to fight vs. keep harvesting).
+    private static final boolean USE_SARSA = true; 
+    private final SarsaWorkerAttack _sarsa;
+
     public void restartPathFind() {
         _astarPath = new AStarPathFinding();
     }
@@ -221,6 +230,60 @@ public class alli extends AIWithComputationBudget {
         return astarMove;
     }
 
+    /*
+     * SARSA(0) over a tiny state-action space to decide whether workers should
+     * join combat. Kept conservative to avoid harming early economy.
+     */
+    private static class SarsaWorkerAttack {
+        static final int ACTION_DEFEND = 0;
+        static final int ACTION_ATTACK = 1;
+
+        private final HashMap<String, double[]> _q = new HashMap<>();
+        private final double _alpha = 0.15;
+        private final double _gamma = 0.95;
+        private final double _epsilon = 0.02; // very low exploration to stay stable
+        private final Random _rnd = new Random(7);
+
+        private String _lastState = null;
+        private int _lastAction = -1;
+        private double _lastScore = 0;
+
+        private double[] row(String s) {
+            return _q.computeIfAbsent(s, k -> new double[]{0, 0});
+        }
+
+        int selectAction(String state) {
+            double[] r = row(state);
+            if (_rnd.nextDouble() < _epsilon)
+                return _rnd.nextInt(2);
+            return r[ACTION_ATTACK] > r[ACTION_DEFEND] ? ACTION_ATTACK : ACTION_DEFEND;
+        }
+
+        int step(String state, double score) {
+            // Pick next action (a')
+            int action = selectAction(state);
+            // Update previous state-action using SARSA target with a'
+            if (_lastState != null && _lastAction >= 0) {
+                double reward = score - _lastScore;
+                double[] prev = row(_lastState);
+                double[] next = row(state);
+                double target = reward + _gamma * next[action];
+                prev[_lastAction] = prev[_lastAction] + _alpha * (target - prev[_lastAction]);
+            }
+            _lastState = state;
+            _lastAction = action;
+            _lastScore = score;
+            return action;
+        }
+
+        void reset() {
+            _q.clear();
+            _lastState = null;
+            _lastAction = -1;
+            _lastScore = 0;
+        }
+    }
+
     // Constructor to create search agent
     public alli(UnitTypeTable utt) {
         super(-1, -1);
@@ -234,6 +297,7 @@ public class alli extends AIWithComputationBudget {
             System.err.println("[alli] LLMInformedMCTS init failed (using rules only): " + e.getMessage());
         }
         _searchAgent = tmp;
+        _sarsa = USE_SARSA ? new SarsaWorkerAttack() : null;
         restartPathFind(); //FloodFillPathFinding(); //AStarPathFinding();
         _memHarvesters = new ArrayList<>();
                 
@@ -247,6 +311,8 @@ public class alli extends AIWithComputationBudget {
     public void reset() {
         _memHarvesters = new ArrayList<>();
         _lastSearchTick = -9999;
+        if (_sarsa != null)
+            _sarsa.reset();
         // Reset internal tree/cache state in the Search+LLM delegate.
         if (_searchAgent != null)
             _searchAgent.reset();
@@ -704,19 +770,75 @@ public class alli extends AIWithComputationBudget {
         int area = _pgs.getWidth() * _pgs.getHeight();
         return area <= 144; // 12x12 or smaller, mirrors CRush's rush trigger
     }
+
+    // --- SARSA helpers (lightweight state + reward) ---
+    String sarsaStateKey() {
+        int timeBucket = (_gs != null ? _gs.getTime() : 0) / 200;
+        int mapBucket = (_pgs.getWidth() * _pgs.getHeight()) <= 144 ? 0 : 1;
+        int workerDiff = Integer.signum(_workers.size() - _enemyWorkers.size());
+        int barracksDiff = Integer.signum(_barracks.size() - _enemyBarracks.size());
+        int threat = baseUnderThreat() ? 1 : 0;
+        return "t" + timeBucket + "_m" + mapBucket + "_wd" + workerDiff +
+               "_bd" + barracksDiff + "_th" + threat;
+    }
+
+    double sarsaScore() {
+        int myHP = 0;
+        for (Unit u : _allyUnits)
+            myHP += u.getHitPoints();
+        int enemyHP = 0;
+        for (Unit u : _enemies)
+            enemyHP += u.getHitPoints();
+        int resourceDiff = (_p != null && _enemyP != null) ? _p.getResources() - _enemyP.getResources() : 0;
+        return (myHP - enemyHP) + 4 * resourceDiff;
+    }
+
+    boolean safeToOverrideWithSARSA() {
+        if (_workers.size() <= 3)
+            return false; // keep economy intact
+        if (_gs != null && _gs.getTime() < 150)
+            return false; // avoid very early aggression
+        return true;
+    }
     
     boolean shouldWorkersAttack() {
-        // Defend sooner: pull workers into combat as soon as the base is threatened or we detect a worker rush.
-        if (isWorkerRush())
+        boolean heuristic =
+                isWorkerRush() ||
+                baseUnderThreat() ||
+                _pgs.getWidth() <= 12 ||
+                (enemyHeaviesWeak() && _enemyArchers.isEmpty() &&
+                     _heavies.isEmpty() && _futureHeavies == 0 && _archers.isEmpty());
+        if (heuristic)
             return true;
-        if (baseUnderThreat())
+
+        // On-policy SARSA override (very conservative). If disabled, return heuristic only.
+        if (_sarsa == null)
+            return false;
+
+        String state = sarsaStateKey();
+        double score = sarsaScore();
+        int action = _sarsa.step(state, score);
+        boolean sarsaAttack = (action == SarsaWorkerAttack.ACTION_ATTACK);
+
+        if (heuristic)
             return true;
-        if (_pgs.getWidth() <= 12)
+        if (sarsaAttack && safeToOverrideWithSARSA())
             return true;
-        if (enemyHeaviesWeak() && _enemyArchers.isEmpty() &&
-                 _heavies.isEmpty() && _futureHeavies == 0 && _archers.isEmpty())
-            return true;
-        return false; //todo here
+        return false;
+    }
+    
+    // Detect early worker-only aggression.
+    boolean isWorkerRush() {
+        // GameState exposes the current tick; PhysicalGameState does not.
+        if (_gs != null && _gs.getTime() > 600)
+            return false;
+        int eWorkers = _enemyWorkers.size();
+        int eBarracks = _enemyBarracks.size();
+        int eCombat = _enemyLights.size() + _enemyHeavies.size() + _enemyArchers.size();
+        int distToBase = closestEnemyWorkerDistanceToBase();
+        boolean enemyAlreadyClose = distToBase <= Math.max(6, _pgs.getWidth() / 2);
+        return eBarracks == 0 && eCombat == 0 &&
+               (eWorkers >= 3 || (eWorkers >= 2 && enemyAlreadyClose));
     }
     
     // Detect early worker-only aggression.
