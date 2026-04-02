@@ -5,5 +5,5 @@
   "agent_file": "AdaptiveRushBot.java",
   "model_provider": "ollama",
   "model_name": "llama3.1:8b",
-  "description": "An LLM-guided hybrid rush bot that consults Ollama to choose between WorkerRush and LightRush, with heuristic fallback if the model is unavailable."
+  "description": "An LLM-guided hybrid rush bot that consults Ollama to pick between WorkerRush, LightRush, and HeavyRush based on visible enemy composition. Falls back to a counter-strategy heuristic (Light beats Worker, Heavy beats Light) if the model is unavailable."
 }
