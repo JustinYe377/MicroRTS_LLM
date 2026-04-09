@@ -1,8 +1,8 @@
 {
   "team_name": "chase",
   "display_name": "Chase",
-  "agent_class": "ChaseBot",
-  "agent_file": "ChaseBot.java",
+  "agent_class": "ChaseBotPacked",
+  "agent_file": "ChaseBotPacked.java",
   "model_provider": "openai",
   "model_name": "gpt-5",
   "description": "Hybrid LLM-guided bot: adaptive macro-strategy engine with GPT-5 strategic consultation for attack/defense bias, military/economy balance, and unit composition. Rule-based execution with LLM-tuned parameters every 200 ticks."

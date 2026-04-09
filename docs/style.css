@@ -459,6 +459,44 @@ tr.active-row {
     text-decoration: none;
 }
 
+/* Per-map score chips in detail panel */
+.map-scores-section {
+    margin-bottom: 0.75rem;
+}
+
+.map-scores-section h5 {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+    font-weight: 500;
+}
+
+.map-score-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.map-score-chip {
+    display: inline-block;
+    padding: 0.25rem 0.6rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.map-score-chip strong {
+    color: var(--text-primary);
+}
+
+.map-score-chip .grade {
+    font-size: 0.7rem;
+    padding: 0.1rem 0.3rem;
+    vertical-align: middle;
+}
+
 /* Source badge */
 .source-badge {
     display: inline-block;

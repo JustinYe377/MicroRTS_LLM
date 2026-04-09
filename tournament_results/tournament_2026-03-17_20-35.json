@@ -1,0 +1,554 @@
+{
+  "version": "1.0",
+  "format": "single-elimination",
+  "date": "2026-03-17T20:35:04.823048",
+  "config": {
+    "map": "maps/8x8/basesWorkers8x8.xml",
+    "max_cycles": 1500,
+    "games_per_matchup": 1
+  },
+  "anchors": {
+    "ai.RandomBiasedAI": {
+      "name": "RandomBiasedAI",
+      "weight": 10,
+      "tier": "easy"
+    },
+    "ai.abstraction.HeavyRush": {
+      "name": "HeavyRush",
+      "weight": 20,
+      "tier": "medium-hard"
+    },
+    "ai.abstraction.LightRush": {
+      "name": "LightRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.abstraction.WorkerRush": {
+      "name": "WorkerRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.competition.tiamat.Tiamat": {
+      "name": "Tiamat",
+      "weight": 20,
+      "tier": "hard"
+    },
+    "ai.coac.CoacAI": {
+      "name": "CoacAI",
+      "weight": 20,
+      "tier": "hard"
+    }
+  },
+  "results": [
+    {
+      "team_name": "crush",
+      "display_name": "CRush",
+      "agent_class": "ai.abstraction.submissions.crush.CRush",
+      "model_provider": "none",
+      "model_name": "none",
+      "score": 89.0,
+      "grade": "A",
+      "eliminated_at": "CoacAI",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.0,
+          "weighted_points": 15.0
+        },
+        "Tiamat": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.0,
+          "weighted_points": 20.0
+        },
+        "CoacAI": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "hope",
+      "display_name": "HOPE",
+      "agent_class": "ai.abstraction.submissions.hope.hope",
+      "model_provider": "ollama",
+      "model_name": "llama3.1:8b",
+      "score": 79.0,
+      "grade": "B",
+      "eliminated_at": "Tiamat",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.0,
+          "weighted_points": 15.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 1,
+          "losses": 0,
+          "avg_game_score": 0.5,
+          "weighted_points": 10.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "chase",
+      "display_name": "Chase",
+      "agent_class": "ai.abstraction.submissions.chase.ChaseBotPacked",
+      "model_provider": "openai",
+      "model_name": "gpt-5",
+      "score": 69.0,
+      "grade": "C",
+      "eliminated_at": "Tiamat",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.0,
+          "weighted_points": 15.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "yebot",
+      "display_name": "yebot",
+      "agent_class": "ai.abstraction.submissions.yebot.yebot",
+      "model_provider": "ollama",
+      "model_name": "qwen3:8b",
+      "score": 69.0,
+      "grade": "C",
+      "eliminated_at": "Tiamat",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.0,
+          "weighted_points": 15.0
+        },
+        "Tiamat": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "allibot",
+      "display_name": "AlliBot",
+      "agent_class": "ai.abstraction.submissions.allibot.alli",
+      "model_provider": "ollama",
+      "model_name": "qwen3:14b",
+      "score": 54.0,
+      "grade": "D",
+      "eliminated_at": "WorkerRush",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "boom-or-rush-bot",
+      "display_name": "Boom/Rush Bot",
+      "agent_class": "ai.abstraction.submissions.boom_or_rush_bot.BoomRushBotOllama",
+      "model_provider": "ollama",
+      "model_name": "qwen3.5:9b",
+      "score": 54.0,
+      "grade": "D",
+      "eliminated_at": "WorkerRush",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "example-team",
+      "display_name": "Example Team",
+      "agent_class": "ai.abstraction.submissions.example_team.WorkerRushLLMAgent",
+      "model_provider": "none",
+      "model_name": "none",
+      "score": 54.0,
+      "grade": "D",
+      "eliminated_at": "WorkerRush",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "mayari-llm",
+      "display_name": "Mayari-LLM",
+      "agent_class": "ai.abstraction.submissions.mayari_llm.mayari",
+      "model_provider": "ollama",
+      "model_name": "llama3.1:8b",
+      "score": 54.0,
+      "grade": "D",
+      "eliminated_at": "WorkerRush",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "penguin-bot",
+      "display_name": "PenguinBot",
+      "agent_class": "ai.mcts.submissions.penguin_bot.MCTSAgent",
+      "model_provider": "ollama",
+      "model_name": "llama3.1:8b",
+      "score": 54.0,
+      "grade": "D",
+      "eliminated_at": "WorkerRush",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "xiebot",
+      "display_name": "xiebot",
+      "agent_class": "ai.mcts.submissions.xiebot.XieBot",
+      "model_provider": "ollama",
+      "model_name": "llama3.1:8b",
+      "score": 54.0,
+      "grade": "D",
+      "eliminated_at": "WorkerRush",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 12.0
+        },
+        "HeavyRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 24.0
+        },
+        "LightRush": {
+          "wins": 1,
+          "draws": 0,
+          "losses": 0,
+          "avg_game_score": 1.2,
+          "weighted_points": 18.0
+        },
+        "WorkerRush": {
+          "wins": 0,
+          "draws": 0,
+          "losses": 1,
+          "avg_game_score": 0.0,
+          "weighted_points": 0.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "jmurr",
+      "display_name": "jmurr",
+      "agent_class": "ai.mcts.submissions.jmurr.JMurrAgent",
+      "model_provider": "none",
+      "model_name": "none",
+      "score": 5.0,
+      "grade": "F",
+      "eliminated_at": "RandomBiasedAI",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 1,
+          "losses": 0,
+          "avg_game_score": 0.5,
+          "weighted_points": 5.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    },
+    {
+      "team_name": "nick-mcts",
+      "display_name": "Nick MCTS",
+      "agent_class": "ai.mcts.submissions.nick_mcts.NickMCTS",
+      "model_provider": "ollama",
+      "model_name": "llama3.1:8b",
+      "score": 5.0,
+      "grade": "F",
+      "eliminated_at": "RandomBiasedAI",
+      "opponents": {
+        "RandomBiasedAI": {
+          "wins": 0,
+          "draws": 1,
+          "losses": 0,
+          "avg_game_score": 0.5,
+          "weighted_points": 5.0
+        }
+      },
+      "date": "2026-03-17T20:35:04.823048",
+      "map": "maps/8x8/basesWorkers8x8.xml",
+      "games_per_matchup": 1
+    }
+  ],
+  "head_to_head": []
+}

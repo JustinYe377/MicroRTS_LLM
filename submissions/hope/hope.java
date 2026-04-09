@@ -2,6 +2,7 @@ package ai.abstraction.submissions.hope;
 
 import ai.abstraction.AbstractionLayerAI;
 import ai.abstraction.WorkerRush;
+import ai.abstraction.WorkerRushPlusPlus;
 import ai.abstraction.LightRush;
 import ai.abstraction.HeavyRush;
 import ai.abstraction.RangedRush;
@@ -51,6 +52,7 @@ public class hope extends AbstractionLayerAI {
 
     public enum RushStrategy {
         WORKER_RUSH,
+        WORKER_RUSH_PLUS,
         LIGHT_RUSH,
         HEAVY_RUSH,
         RANGED_RUSH
@@ -58,6 +60,7 @@ public class hope extends AbstractionLayerAI {
 
     // Strategy instances (composition pattern)
     private WorkerRush workerRushAI;
+    private WorkerRushPlusPlus workerRushPlusAI;
     private LightRush lightRushAI;
     private HeavyRush heavyRushAI;
     private RangedRush rangedRushAI;
@@ -68,6 +71,10 @@ public class hope extends AbstractionLayerAI {
     // Current strategy state
     private RushStrategy currentStrategy = RushStrategy.WORKER_RUSH;
     private int lastLLMConsultation = -9999;  // Force first consultation
+
+    // HOPE 2.0
+    private int lastStrategySwitch = -9999;                                
+    private static final int MIN_STRATEGY_COMMITMENT = 100;  // Ticks before allowing a switch   
 
     // Configuration (from environment variables)
     private static final String OLLAMA_HOST =
@@ -101,6 +108,7 @@ public class hope extends AbstractionLayerAI {
     public void reset() {
         super.reset();
         if (workerRushAI != null) workerRushAI.reset();
+        if (workerRushPlusAI != null) workerRushPlusAI.reset();
         if (lightRushAI != null) lightRushAI.reset();
         if (heavyRushAI != null) heavyRushAI.reset();
         if (rangedRushAI != null) rangedRushAI.reset();
@@ -110,6 +118,7 @@ public class hope extends AbstractionLayerAI {
         utt = a_utt;
         // Initialize all strategy instances
         workerRushAI = new WorkerRush(a_utt, pf);
+        workerRushPlusAI = new WorkerRushPlusPlus(a_utt, pf);
         lightRushAI = new LightRush(a_utt, pf);
         heavyRushAI = new HeavyRush(a_utt, pf);
         rangedRushAI = new RangedRush(a_utt, pf);
@@ -133,7 +142,11 @@ public class hope extends AbstractionLayerAI {
         if (currentTime - lastLLMConsultation >= LLM_INTERVAL) {
             RushStrategy newStrategy = consultLLMForStrategy(player, gs);
             if (newStrategy != null && newStrategy != currentStrategy) {
-                switchStrategy(newStrategy, currentTime);
+                if (currentTime - lastStrategySwitch >= MIN_STRATEGY_COMMITMENT)
+                {
+                    switchStrategy(newStrategy, currentTime);
+                    lastStrategySwitch = currentTime;
+                }
             }
             lastLLMConsultation = currentTime;
         }
@@ -149,6 +162,8 @@ public class hope extends AbstractionLayerAI {
         switch (currentStrategy) {
             case WORKER_RUSH:
                 return workerRushAI;
+            case WORKER_RUSH_PLUS:
+                return workerRushPlusAI;
             case LIGHT_RUSH:
                 return lightRushAI;
             case HEAVY_RUSH:
@@ -190,6 +205,59 @@ public class hope extends AbstractionLayerAI {
         }
     }
 
+    private String enemyTracker(int player, GameState gs) {
+        PhysicalGameState pgs = gs.getPhysicalGameState();
+        int enemy = 1 - player;
+
+        // GET UNIT POSTITIONS:
+        boolean UNDER_ATTACK = false;
+        int num_enemies = 0;
+        double avg_dist = 0;
+        int sumX = 0;
+        int sumY = 0;
+
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() != enemy) continue;
+
+            if (u.getType().name.equals("Light") || u.getType().name.equals("Ranged") || u.getType().name.equals("Worker") || u.getType().name.equals("Heavy") )
+            {
+                num_enemies++;
+                sumX += u.getX();
+                sumY += u.getY();
+                for (Unit myUnit : pgs.getUnits()) {
+                    if (myUnit.getPlayer() == player && myUnit.getType().name.equals("Base")) {
+                        double dist = Math.abs(u.getX() - myUnit.getX()) + Math.abs(u.getY() - myUnit.getY());
+                        avg_dist += dist;
+                        if (dist < 5) UNDER_ATTACK = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        int centroidX = num_enemies > 0 ? sumX / num_enemies : 0;
+        int centroidY = num_enemies > 0 ? sumY / num_enemies : 0;
+        avg_dist = num_enemies > 0 ? avg_dist / num_enemies : 0;
+        
+        if(UNDER_ATTACK)
+        {
+            String out = String.format("WE ARE UNDER ATTACK BY %d ENEMIES. GROUP CENTER LOCATED AT %d X and %d Y.", num_enemies, centroidX, centroidY );
+            return out;
+        }
+
+        else if(num_enemies == 0)
+        {
+            return "Enemy has yet to produce any forces and thus has no army position.";
+        }
+
+        else
+        {
+            String out = String.format("The enemies' forces are about %.1f away from the base at location %d X and %d Y.", avg_dist, centroidX, centroidY );
+            return out;
+        }
+
+    }
+
     private String inferEnemyStrategy(int player, GameState gs) {
         PhysicalGameState pgs = gs.getPhysicalGameState();
         int enemy = 1 - player;
@@ -197,15 +265,17 @@ public class hope extends AbstractionLayerAI {
         boolean enemyHasBarracks = false;
         boolean enemyHasLight = false;
         boolean enemyHasRanged = false;
+        boolean enemyHasHeavy = false;
         boolean enemyWorkersAttacking = false;
         int enemyWorkerCount = 0;
-        
+
         for (Unit u : pgs.getUnits()) {
             if (u.getPlayer() != enemy) continue;
             
             if (u.getType().name.equals("Barracks")) enemyHasBarracks = true;
             if (u.getType().name.equals("Light")) enemyHasLight = true;
             if (u.getType().name.equals("Ranged")) enemyHasRanged = true;
+            if (u.getType().name.equals("Heavy")) enemyHasHeavy = true;
             if (u.getType().name.equals("Worker")) {
                 enemyWorkerCount++;
                 // Check if worker is moving toward your base (simple proximity check)
@@ -225,6 +295,8 @@ public class hope extends AbstractionLayerAI {
             return "RANGED_RUSH";
         } else if (enemyHasLight) {
             return "LIGHT_RUSH";
+        } else if (enemyHasHeavy) {
+            return "HEAVY_RUSH";
         } else if (enemyHasBarracks) {
             return "BUILDING_BARRACKS (likely LIGHT_RUSH soon)";
         }
@@ -274,6 +346,7 @@ public class hope extends AbstractionLayerAI {
         int myStrength = myWorkers + myLight * 2 + myHeavy * 4 + myRanged * 2;
         int enemyStrength = enemyWorkers + enemyLight * 2 + enemyHeavy * 4 + enemyRanged * 2;
         String enemyStrategy = inferEnemyStrategy(player, gs);
+        String enemyLocation = enemyTracker(player, gs);
 
         // Determine game phase
         int maxCycles = 3000;  // Default, could be read from config
@@ -290,6 +363,7 @@ public class hope extends AbstractionLayerAI {
         sb.append("You are a strategic advisor for a real-time strategy game.\n\n");
         sb.append("STRATEGIES:\n");
         sb.append("- WORKER_RUSH: Fast early aggression with workers (no barracks needed)\n");
+        sb.append("- WORKER_RUSH_PLUS: Send one worker to fight while keeping one worker harvesting and building barracks. Counters mirror WorkerRush by gaining an economic/tech advantage.\n");
         sb.append("- LIGHT_RUSH: Build barracks, train light units (fast, balanced)\n");
         sb.append("- HEAVY_RUSH: Train heavy units (high HP, counters light infantry)\n");
         sb.append("- RANGED_RUSH: Train ranged units (attack from distance, counters melee)\n\n");
@@ -305,24 +379,25 @@ public class hope extends AbstractionLayerAI {
         sb.append("- Enemy forces: ").append(enemyWorkers).append(" workers, ");
         sb.append(enemyLight).append(" light, ").append(enemyHeavy).append(" heavy, ");
         sb.append(enemyRanged).append(" ranged\n");
+        sb.append("Current status of the enemy army: ").append(enemyLocation).append("\n");
         sb.append("- Your strength: ").append(myStrength).append(", Enemy strength: ");
         sb.append(enemyStrength).append("\n\n");
         sb.append("Enemy appears to be using: ").append(enemyStrategy).append("\n\n");
         sb.append("COUNTER STRATEGIES (8x8 MAP):\n");
-        sb.append("- If enemy is using WORKER_RUSH: You MUST use WORKER_RUSH immediately.\n");
-        sb.append("  * Do NOT tech. Do NOT build Barracks first.\n");
+        sb.append("- If enemy is using WORKER_RUSH: You MUST use WORKER_RUSH_PLUS immediately.\n");
+        sb.append("  * One worker fights to stall, one worker harvests and builds barracks.\n");
         sb.append("  * Send your second worker directly to fight. Match worker count.\n");
-        sb.append("  * WorkerRush beats everything except mirror WorkerRush on 8x8.\n\n");
+        sb.append("  * Do NOT use plain WORKER_RUSH — it draws.\n");
+        sb.append("  * WorkerRush beats everything except mirror WorkerRushPlus on 8x8.\n\n");
         sb.append("- If enemy has BARRACKs but no units yet: Use WORKER_RUSH before Light units pop.\n");
         sb.append("  * Workers kill building workers, delay enemy tech.\n\n");
         sb.append("- If enemy has LIGHT units: Switch to RANGED_RUSH if you have Barracks, else WORKER_RUSH.\n\n");
         sb.append("- If enemy has RANGED units: Mirror RANGED_RUSH. Do not melee.\n\n");
-        sb.append("- HEAVY_RUSH: Never use on 8x8.\n\n");
         sb.append("CURRENT GAME PHASE:\n");
         sb.append("- If time < 100 and enemy has more workers fighting: WORKER_RUSH is mandatory.\n");
         sb.append("Current strategy: ").append(currentStrategy).append("\n\n");
         sb.append("Which strategy should we use? Reply with a JSON object containing ONE word for the strategy:\n");
-        sb.append("{\"strategy\": \"WORKER_RUSH\"} or {\"strategy\": \"LIGHT_RUSH\"} or ");
+        sb.append("{\"strategy\": \"WORKER_RUSH\"} or {\"strategy\": \"WORKER_RUSH_PLUS\"} or {\"strategy\": \"LIGHT_RUSH\"} or ");
         sb.append("{\"strategy\": \"HEAVY_RUSH\"} or {\"strategy\": \"RANGED_RUSH\"}\n");
 
         return sb.toString();
@@ -399,6 +474,7 @@ public class hope extends AbstractionLayerAI {
 
         // Try to find strategy name in plain text
         String upper = response.toUpperCase();
+        if (upper.contains("WORKER_RUSH_PLUS")) return RushStrategy.WORKER_RUSH_PLUS;
         if (upper.contains("WORKER_RUSH")) return RushStrategy.WORKER_RUSH;
         if (upper.contains("LIGHT_RUSH")) return RushStrategy.LIGHT_RUSH;
         if (upper.contains("HEAVY_RUSH")) return RushStrategy.HEAVY_RUSH;
@@ -413,6 +489,7 @@ public class hope extends AbstractionLayerAI {
      */
     private RushStrategy parseStrategyString(String s) {
         switch (s) {
+            case "WORKER_RUSH_PLUS": return RushStrategy.WORKER_RUSH_PLUS;
             case "WORKER_RUSH": return RushStrategy.WORKER_RUSH;
             case "LIGHT_RUSH": return RushStrategy.LIGHT_RUSH;
             case "HEAVY_RUSH": return RushStrategy.HEAVY_RUSH;

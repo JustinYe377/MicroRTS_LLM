@@ -1,0 +1,9 @@
+{
+  "team_name": "jmurrllm",
+  "display_name": "jmurrllm",
+  "agent_class": "JMurrAgent",
+  "agent_file": "JMurrAgent.java",
+  "model_provider": "ollama",
+  "model_name": "llama3.1:8b",
+  "description": "Start by prompting an LLM to mirror the opponents strategy for a fixed number of ticks. Then, switch to HybridLLMRush for the remainder of the game."
+}

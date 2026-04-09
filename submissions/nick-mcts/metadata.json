@@ -3,7 +3,7 @@
   "display_name": "Nick MCTS",
   "agent_class": "NickMCTS",
   "agent_file": "NickMCTS.java",
-  "model_provider": "none",
-  "model_name": "none",
+  "model_provider": "ollama",
+  "model_name": "llama3.1:8b",
   "description": "NaiveMCTS with modifications to the evaluation function. Uses worker rush policy instead of random in order to give it a more direct approach. Additionally, rewards workers carrying resources and calculates enemy proximity to base in order to reliably value defense."
 }

@@ -357,6 +357,7 @@
         .history-entry:last-child { border-bottom: none; }
         .history-result { font-weight: 600; min-width: 5rem; }
         .history-agents { color: var(--text-secondary); flex: 1; }
+        .history-map { color: var(--text-muted); font-size: 0.75rem; min-width: 6rem; padding: 0 0.5rem; white-space: nowrap; }
         .history-meta { color: var(--text-muted); font-size: 0.75rem; text-align: right; white-space: nowrap; }
         .history-meta .history-ticks { display: block; }
         .history-meta .history-ts { display: block; font-size: 0.7rem; }
@@ -530,18 +531,21 @@ python3 tournament/match_server.py --port 8080</code></pre>
                 { "class": "ai.mcts.llmguided.LLMInformedMCTS", "name": "LLMInformedMCTS", "description": "MCTS with LLM policy priors", "requires_llm": true }
             ],
             "Submission": [
-                { "class": "ai.abstraction.submissions.allibot.alli", "name": "AlliBot", "description": "Search+LLM (LLMInformedMCTS) with Alli heuristics as fallback", "requires_llm": true },
-                { "class": "ai.abstraction.submissions.boom_or_rush_bot.BoomRushBotOllama", "name": "Boom/Rush Bot", "description": "Uses Ollama to choose between WorkerRush, LightRush, and BoomEconomy", "requires_llm": true },
-                { "class": "ai.abstraction.submissions.chase.ChaseBot", "name": "Chase", "description": "Hybrid LLM-guided bot with GPT-5 strategic consultation", "requires_llm": true },
-                { "class": "ai.abstraction.submissions.crush.CRush", "name": "CRush", "description": "Adaptive ranged rush bot with tactical formations", "requires_llm": false },
-                { "class": "ai.abstraction.submissions.example_team.WorkerRushLLMAgent", "name": "Example Team", "description": "Simple WorkerRush wrapper demonstrating the submission format", "requires_llm": false },
-                { "class": "ai.abstraction.submissions.hope.hope", "name": "HOPE", "description": "Hybrid Ollama Plus Extrapolation: uses Ollama and MCTS with prediction", "requires_llm": true },
-                { "class": "ai.mcts.submissions.jmurr.JMurrAgent", "name": "jmurr", "description": "Evaluates states from the opponent's perspective for scoring", "requires_llm": false },
-                { "class": "ai.mcts.submissions.nick_mcts.NickMCTS", "name": "Nick MCTS", "description": "NaiveMCTS with modified evaluation and worker rush policy", "requires_llm": false },
-                { "class": "ai.mcts.submissions.penguin_bot.MCTSAgent", "name": "PenguinBot", "description": "NaiveMCTS bot with periodic Ollama strategy guidance", "requires_llm": true },
-                { "class": "ai.mcts.submissions.xiebot.XieBot", "name": "xiebot", "description": "Hybrid MCTS bot with Ollama-guided macro strategy switching", "requires_llm": true },
-                { "class": "ai.abstraction.submissions.yebot.yebot", "name": "yebot", "description": "Pure LLM (Cloud DeepSeek) with economy/military/attack prompts", "requires_llm": true },
-                { "class": "ai.abstraction.submissions.mayari_llm.mayari", "name": "Mayari-LLM", "description": "MayariBot hardcoded with the use of LLM", "requires_llm": true }
+                { "class": "ai.abstraction.submissions.allibot.alli", "name": "AlliBot", "description": "Search+LLM (LLMInformedMCTS defaulting to qwen3:14b) with Alli heuristics as fallback.", "requires_llm": true },
+                { "class": "ai.abstraction.submissions.boom_or_rush_bot.BoomRushBotOllama", "name": "Boom/Rush Bot", "description": "Uses Ollama to choose between WorkerRush, LightRush, and BoomEconomy, then delegates execution to the selected built-in strategy.", "requires_llm": true },
+                { "class": "ai.abstraction.submissions.chase.ChaseBotPacked", "name": "Chase", "description": "Hybrid LLM-guided bot: adaptive macro-strategy engine with GPT-5 strategic consultation for attack/defense bias, military/economy balance, and unit composition. Rule-based execution with LLM-tuned parameters every 200 ticks.", "requires_llm": true },
+                { "class": "ai.abstraction.submissions.crush.CRush", "name": "CRush", "description": "Adaptive ranged rush bot with tactical formations. Worker rush on small maps, ranged units with kiting and square formation tactics on larger maps. By Cristiano D'Angelo, submitted by Chase Morris.", "requires_llm": false },
+                { "class": "ai.abstraction.submissions.example_team.WorkerRushLLMAgent", "name": "Example Team", "description": "Simple WorkerRush wrapper demonstrating the submission format. No LLM required.", "requires_llm": false },
+                { "class": "ai.abstraction.submissions.fortress_bot.FortressBotAgent", "name": "Fortress Bot", "description": "Ollama strategy-planned bot with scripted opening and win-condition strategies.", "requires_llm": true },
+                { "class": "ai.abstraction.submissions.hope.hope", "name": "HOPE", "description": "HOPE (Hybrid Ollama Plus Extrapolation): uses ollama and MCTS along with prediction function.", "requires_llm": true },
+                { "class": "ai.mcts.submissions.jmurr.JMurrAgent", "name": "jmurr", "description": "Evaluates states from the opponents perspective and subtracts that from overall evaluation score", "requires_llm": false },
+                { "class": "ai.abstraction.submissions.jmurrllm.JMurrAgent", "name": "jmurrllm", "description": "Start by prompting an LLM to mirror the opponents strategy for a fixed number of ticks. Then, switch to HybridLLMRush for the remainder of the game.", "requires_llm": true },
+                { "class": "ai.abstraction.submissions.mayari_llm.mayari", "name": "Mayari-LLM", "description": "MayariBot hardcoded with the use of LLM", "requires_llm": true },
+                { "class": "ai.mcts.submissions.nick_mcts.NickMCTS", "name": "Nick MCTS", "description": "NaiveMCTS with modifications to the evaluation function. Uses worker rush policy instead of random in order to give it a more direct approach. Additionally, rewards workers carrying resources and calculates enemy proximity to base in order to reliably value defense.", "requires_llm": true },
+                { "class": "ai.abstraction.submissions.parker_riggs.AdaptiveRushBot", "name": "Parkers Bot", "description": "An LLM-guided hybrid rush bot that consults Ollama to choose between WorkerRush and LightRush, with heuristic fallback if the model is unavailable.", "requires_llm": true },
+                { "class": "ai.mcts.submissions.penguin_bot.MCTSAgent", "name": "PenguinBot", "description": "NaiveMCTS bot with periodic Ollama strategy guidance to bias exploration and lookahead.", "requires_llm": true },
+                { "class": "ai.mcts.submissions.xiebot.XieBot", "name": "xiebot", "description": "Deterministic 8x8-focused bot with narrow LLM macro control and selective tactical MCTS.", "requires_llm": true },
+                { "class": "ai.abstraction.submissions.yebot.yebot", "name": "yebot", "description": "Macro-LLM + Hard-coded Micro", "requires_llm": true }
             ]
         };
 
@@ -1063,9 +1067,11 @@ python3 tournament/match_server.py --port 8080</code></pre>
                 else if (m.status === 'timeout') { resultText = 'Timeout'; }
                 var ticks = m.final_tick != null ? m.final_tick + ' ticks' : (m.status === 'error' ? 'error' : '--');
                 var ts = m._timestamp ? formatTime(m._timestamp) : '';
+                var mapLabel = (m.map || '').replace('maps/', '').replace('.xml', '').replace(/\//g, '/');
                 html += '<div class="history-entry" data-history-idx="' + i + '">' +
                     '<span class="history-result ' + resultCls + '">' + resultText + '</span>' +
                     '<span class="history-agents">' + escapeHtml(m.ai1_name) + ' vs ' + escapeHtml(m.ai2_name) + '</span>' +
+                    '<span class="history-map">' + escapeHtml(mapLabel) + '</span>' +
                     '<span class="history-meta"><span class="history-ticks">' + ticks + '</span><span class="history-ts">' + ts + '</span></span>' +
                     '</div>';
             }

@@ -159,6 +159,58 @@ java -cp "lib/*:bin" rts.MicroRTS -f resources/config.properties
 # Validate your submission
 python3 tournament/validate_submission.py submissions/your-team-name/</code></pre>
 
+        <h2>Step 5b: Run Benchmark or Tournament Locally</h2>
+        <p>Before submitting, you can run the same evaluation tools used for official scoring to preview your results.</p>
+
+        <h3>Option A: Benchmark Arena (built-in agents)</h3>
+        <p>The benchmark arena runs a single-elimination gauntlet against 6 reference AIs in ascending difficulty (RandomBiasedAI &rarr; HeavyRush &rarr; LightRush &rarr; WorkerRush &rarr; Tiamat &rarr; CoacAI). Your agent must <strong>win</strong> each round to advance. The final score is 0&ndash;100.</p>
+        <pre><code># Prerequisites: Ollama running with your model pulled
+ollama serve &amp;
+ollama pull llama3.1:8b
+
+# Build first
+ant build
+
+# Run the benchmark arena (default: 1 game per opponent)
+python3 benchmark_arena.py
+
+# Run with multiple games per matchup for more reliable results
+python3 benchmark_arena.py --games 3</code></pre>
+        <p>Environment variables:</p>
+        <table>
+            <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+            <tbody>
+                <tr><td><code>OLLAMA_MODEL</code></td><td>Model for <code>ollama</code> agent</td><td><code>llama3.1:8b</code></td></tr>
+                <tr><td><code>OLLAMA_MODEL_P2</code></td><td>Model for <code>ollama2</code> agent</td><td><code>qwen3:4b</code></td></tr>
+                <tr><td><code>GEMINI_API_KEY</code></td><td>Enable Gemini agent benchmarking</td><td>(not set)</td></tr>
+            </tbody>
+        </table>
+        <p>Results are saved to <code>benchmark_results/</code> as JSON and Markdown.</p>
+
+        <h3>Option B: Tournament Runner (submitted agents)</h3>
+        <p>The tournament runner evaluates <strong>submission folders</strong>&mdash;the same pipeline used for official competition scoring. It discovers all valid submissions under <code>submissions/</code>, installs them, compiles the project, and runs single-elimination on multiple maps (8x8 + 16x16).</p>
+        <pre><code># Build and run the tournament over all submissions
+python3 tournament/run_tournament.py
+
+# Run with multiple games per matchup
+python3 tournament/run_tournament.py --games 3
+
+# Skip head-to-head games between submissions
+python3 tournament/run_tournament.py --skip-h2h
+
+# Use a custom submissions directory
+python3 tournament/run_tournament.py --submissions-dir submissions/</code></pre>
+        <p>To test only your submission, you can point to a directory containing just your team folder:</p>
+        <pre><code>mkdir -p my-test/your-team-name
+cp -r submissions/your-team-name/* my-test/your-team-name/
+python3 tournament/run_tournament.py --submissions-dir my-test --skip-h2h</code></pre>
+        <p>Results are saved to <code>tournament_results/</code> as JSON.</p>
+
+        <h3>Option C: Quick Benchmark Script</h3>
+        <p>For a simpler smoke test of built-in LLM agents against RandomBiasedAI:</p>
+        <pre><code># Runs 2 games each for llama3.1:8b and qwen3:14b
+./benchmark.sh</code></pre>
+
         <h2>Step 6: Include Self-Reported Results (Optional)</h2>
         <p>You can include a <code>results.json</code> file in your submission folder with benchmark results you ran yourself using your preferred model. This lets reviewers see how your agent performs with a more capable model, and helps distinguish whether a lower official score is a model-capability issue vs. a prompt/strategy issue.</p>
         <p>Run the benchmark arena against the six built-in leaderboard opponents and fill in the results:</p>

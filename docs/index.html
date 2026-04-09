@@ -30,8 +30,9 @@
         <section id="leaderboard" class="tab-content active">
             <h2>Leaderboard</h2>
             <p class="section-desc">
-                Best score per model/team. Single-elimination against 6 reference AIs (0-100 scale).
-                Click column headers to sort. Click a row to see individual games.
+                Best score per model/team. Single-elimination against 6 reference AIs on both 8x8 and 16x16 maps.
+                Combined score is the average of per-map scores (0-100 scale).
+                Click column headers to sort. Click a row to see per-map breakdown and individual games.
             </p>
             <div class="toolbar">
                 <input type="text" id="leaderboard-search" class="search-input" placeholder="Search name, grade...">
@@ -51,6 +52,8 @@
                             <th data-sort="score" data-type="number">Score</th>
                             <th data-sort="grade" data-type="grade">Grade</th>
                             <th data-sort="date" data-type="date">Last Updated</th>
+                            <th data-sort="score_8x8" data-type="number">8x8</th>
+                            <th data-sort="score_16x16" data-type="number">16x16</th>
                             <th>RandomBiased</th>
                             <th>HeavyRush</th>
                             <th>LightRush</th>
@@ -123,7 +126,7 @@
                 Click column headers to sort. Click a row to see individual games.
             </p>
             <div class="toolbar">
-                <input type="text" id="history-search" class="search-input" placeholder="Search name, source, map...">
+                <input type="text" id="history-search" class="search-input" placeholder="Search name, source...">
                 <label class="date-label">From</label>
                 <input type="date" id="history-date-from" class="date-input">
                 <label class="date-label">To</label>
@@ -140,7 +143,8 @@
                             <th data-sort="score" data-type="number">Score</th>
                             <th data-sort="grade" data-type="grade">Grade</th>
                             <th data-sort="source" data-type="string">Source</th>
-                            <th data-sort="map" data-type="string">Map</th>
+                            <th data-sort="score_8x8" data-type="number">8x8</th>
+                            <th data-sort="score_16x16" data-type="number">16x16</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
@@ -160,6 +164,6 @@
         </div>
     </footer>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=2"></script>
 </body>
 </html>

@@ -1377,12 +1377,26 @@ public class mayari extends AIWithComputationBudget {
             buildBase();
             barracksAction();
             basesAction();
-            workerAction();
             
-            if (shouldWorkersAttack())
+            // NEW --- THREAT DETECTION REFLEX ---
+            boolean baseUnderAttack = false;
+            for (Unit base : _bases) {
+                Unit closestEnemy = closest(base, _enemies);
+                // If an enemy is within 6 tiles of our base, POUND the alarm!
+                if (closestEnemy != null && distance(toPos(base), toPos(closestEnemy)) <= 6) {
+                    baseUnderAttack = true;
+                    break;
+                }
+            }
+            
+            // This should hopefully be able to beat WorkerRush
+            if (baseUnderAttack || shouldWorkersAttack()) {
                 goCombat(_workers, 35);
-            else
+            } else {
+                workerAction();
                 freeBlocks(_workers);
+            }
+            // -------------------------------
             
             goCombat(_heavies, 30);
             goCombat(_archers, 15);
