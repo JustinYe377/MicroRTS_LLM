@@ -2,10 +2,12 @@ package ai.abstraction.submissions.hope;
 
 import ai.abstraction.AbstractionLayerAI;
 import ai.abstraction.WorkerRush;
-import ai.abstraction.WorkerRushPlusPlus;
 import ai.abstraction.LightRush;
 import ai.abstraction.HeavyRush;
 import ai.abstraction.RangedRush;
+import ai.abstraction.EconomyRush;
+import ai.abstraction.BoomEconomy;
+import ai.abstraction.TurtleDefense;
 
 import ai.abstraction.pathfinding.AStarPathFinding;
 import ai.core.AI;
@@ -52,18 +54,23 @@ public class hope extends AbstractionLayerAI {
 
     public enum RushStrategy {
         WORKER_RUSH,
-        WORKER_RUSH_PLUS,
         LIGHT_RUSH,
         HEAVY_RUSH,
-        RANGED_RUSH
+        RANGED_RUSH,
+        BALANCED,
+        ECONOMY_BOOM,
+        TURTLE
     }
 
     // Strategy instances (composition pattern)
     private WorkerRush workerRushAI;
-    private WorkerRushPlusPlus workerRushPlusAI;
     private LightRush lightRushAI;
     private HeavyRush heavyRushAI;
     private RangedRush rangedRushAI;
+    private TurtleDefense turtleAI;
+    private BoomEconomy economyAI;
+    private EconomyRush balancedAI; //uses EconomyRush
+
 
     // Unit type table reference
     protected UnitTypeTable utt;
@@ -108,20 +115,24 @@ public class hope extends AbstractionLayerAI {
     public void reset() {
         super.reset();
         if (workerRushAI != null) workerRushAI.reset();
-        if (workerRushPlusAI != null) workerRushPlusAI.reset();
         if (lightRushAI != null) lightRushAI.reset();
         if (heavyRushAI != null) heavyRushAI.reset();
         if (rangedRushAI != null) rangedRushAI.reset();
+        if (economyAI != null) economyAI.reset();
+        if (balancedAI != null) balancedAI.reset();
+        if (turtleAI != null) turtleAI.reset();
     }
 
     public void reset(UnitTypeTable a_utt) {
         utt = a_utt;
         // Initialize all strategy instances
         workerRushAI = new WorkerRush(a_utt, pf);
-        workerRushPlusAI = new WorkerRushPlusPlus(a_utt, pf);
         lightRushAI = new LightRush(a_utt, pf);
         heavyRushAI = new HeavyRush(a_utt, pf);
         rangedRushAI = new RangedRush(a_utt, pf);
+        economyAI = new BoomEconomy(a_utt, pf);
+        balancedAI = new EconomyRush(a_utt, pf);
+        turtleAI = new TurtleDefense(a_utt, pf);
 
         System.out.println("[hope] Initialized with model=" + MODEL +
                            ", interval=" + LLM_INTERVAL + ", initial_strategy=" + currentStrategy);
@@ -162,14 +173,18 @@ public class hope extends AbstractionLayerAI {
         switch (currentStrategy) {
             case WORKER_RUSH:
                 return workerRushAI;
-            case WORKER_RUSH_PLUS:
-                return workerRushPlusAI;
             case LIGHT_RUSH:
                 return lightRushAI;
             case HEAVY_RUSH:
                 return heavyRushAI;
             case RANGED_RUSH:
                 return rangedRushAI;
+            case TURTLE:
+                return turtleAI;
+            case ECONOMY_BOOM:
+                return economyAI;
+            case BALANCED:
+                return balancedAI;
             default:
                 return workerRushAI;
         }
@@ -264,8 +279,11 @@ public class hope extends AbstractionLayerAI {
         
         boolean enemyHasBarracks = false;
         boolean enemyHasLight = false;
+        int enemyLightCount = 0;
         boolean enemyHasRanged = false;
+        int enemyRangedCount = 0;
         boolean enemyHasHeavy = false;
+        int enemyHeavyCount = 0;
         boolean enemyWorkersAttacking = false;
         int enemyWorkerCount = 0;
 
@@ -273,9 +291,18 @@ public class hope extends AbstractionLayerAI {
             if (u.getPlayer() != enemy) continue;
             
             if (u.getType().name.equals("Barracks")) enemyHasBarracks = true;
-            if (u.getType().name.equals("Light")) enemyHasLight = true;
-            if (u.getType().name.equals("Ranged")) enemyHasRanged = true;
-            if (u.getType().name.equals("Heavy")) enemyHasHeavy = true;
+            if (u.getType().name.equals("Light")){
+                enemyHasLight = true;
+                enemyLightCount++;
+            }
+            if (u.getType().name.equals("Ranged")){ 
+                enemyHasRanged = true;
+                enemyRangedCount++;
+            }
+            if (u.getType().name.equals("Heavy")){
+                enemyHasHeavy = true;
+                enemyHeavyCount++;
+            }
             if (u.getType().name.equals("Worker")) {
                 enemyWorkerCount++;
                 // Check if worker is moving toward your base (simple proximity check)
@@ -289,18 +316,61 @@ public class hope extends AbstractionLayerAI {
             }
         }
         
-        if (enemyWorkerCount >= 2 && enemyWorkersAttacking && gs.getTime() < 150) {
-            return "WORKER_RUSH (confirmed)";
-        } else if (enemyHasRanged) {
-            return "RANGED_RUSH";
-        } else if (enemyHasLight) {
-            return "LIGHT_RUSH";
-        } else if (enemyHasHeavy) {
-            return "HEAVY_RUSH";
-        } else if (enemyHasBarracks) {
-            return "BUILDING_BARRACKS (likely LIGHT_RUSH soon)";
+        // for 8x8 
+        if(pgs.getWidth() <= 8)
+        {
+            if (enemyWorkerCount >= 2 && enemyWorkersAttacking && gs.getTime() < 150) {
+                return "WORKER_RUSH (confirmed)";
+            } else if (enemyHasRanged) {
+                return "RANGED_RUSH";
+            } else if (enemyHasLight) {
+                return "LIGHT_RUSH";
+            } else if (enemyHasHeavy) {
+                return "HEAVY_RUSH";
+            } else if (enemyHasBarracks) {
+                return "BUILDING_BARRACKS (likely LIGHT_RUSH soon)";
+            }
+            return "UNKNOWN... probably TURTLE";
         }
-        return "UNKNOWN";
+        else
+        {
+            if ( (enemyHasHeavy && enemyHasLight) || (enemyHasHeavy && enemyHasRanged) || (enemyHasLight && enemyHasRanged) )
+            {
+                // balanced
+                return "BALANCED";
+            }
+            else if(enemyWorkerCount >= 6)
+            {
+                if(enemyWorkersAttacking)
+                {
+                    return "WORKER_RUSH";
+                }
+                return "ECONOMY_BOOM";
+            }
+            else if(enemyLightCount >= 2)
+            {
+                return "LIGHT_RUSH";
+            }
+            else if(enemyHeavyCount >= 2)
+            {
+                return "HEAVY_RUSH";
+            }
+            else if(enemyRangedCount >= 2)
+            {
+                return "RANGED_RUSH";
+            }
+            else
+            {
+                if(gs.getTime() < 100)
+                {
+                    return "UNKNOWN... too early to tell!";
+                }
+                return "UNKNOWN... probably TURTLE";
+            }
+
+        }
+
+        //return "UNKNOWN... probably TURTLE";
     }
 
     /**
@@ -347,6 +417,7 @@ public class hope extends AbstractionLayerAI {
         int enemyStrength = enemyWorkers + enemyLight * 2 + enemyHeavy * 4 + enemyRanged * 2;
         String enemyStrategy = inferEnemyStrategy(player, gs);
         String enemyLocation = enemyTracker(player, gs);
+        int mapSize = pgs.getWidth();
 
         // Determine game phase
         int maxCycles = 3000;  // Default, could be read from config
@@ -359,18 +430,22 @@ public class hope extends AbstractionLayerAI {
             gamePhase = "LATE";
         }
 
+        // change prompts for strategies.
         StringBuilder sb = new StringBuilder();
         sb.append("You are a strategic advisor for a real-time strategy game.\n\n");
         sb.append("STRATEGIES:\n");
-        sb.append("- WORKER_RUSH: Fast early aggression with workers (no barracks needed)\n");
-        sb.append("- WORKER_RUSH_PLUS: Send one worker to fight while keeping one worker harvesting and building barracks. Counters mirror WorkerRush by gaining an economic/tech advantage.\n");
-        sb.append("- LIGHT_RUSH: Build barracks, train light units (fast, balanced)\n");
-        sb.append("- HEAVY_RUSH: Train heavy units (high HP, counters light infantry)\n");
-        sb.append("- RANGED_RUSH: Train ranged units (attack from distance, counters melee)\n\n");
+        sb.append("- WORKER_RUSH: Send two workers immediately to attack enemy. Do not spend time getting resources. Keep making workers and sending them to attack the enemy base. GOOD ON 8x8 MAP SIZE!\n");
+        sb.append("- LIGHT_RUSH: Send workers to attack enemy base. Create more workers and harvest resources to build barracks. Create light units as soon as possible and send them to attack enemy base. COUNTERS RANGED UNITS!\n");
+        sb.append("- HEAVY_RUSH: Send workers to attack enemy base. Create more workers and harvest resources to build barracks. Create heavy units as soon as possible and send them to attack enemy base. COUNTERS LIGHT UNITS!\n");
+        sb.append("- TURTLE: Defend your base, build barracks, train heavy units. Only attack when fully prepared. GOOD WHEN UNDER ATTACK AND LOSING!\n");
+        sb.append("- ECONOMY_BOOM: Maximize resource collection early. Train many workers. Build military late but with superior resources. GOOD FOR SLOW GAMES WITH MANY RESOURCES!\n");
+        sb.append("- BALANCED: Play a balanced strategy. Build a mix of units. Harvest resources early, then build military. Attack when you have an advantage. GOOD FOR SLOW GAMES OR WHEN ENEMY IS USING MIXED ARMY!\n");
+        sb.append("- RANGED_RUSH: Send workers immediately to attack enemy. While they are attacking enemy base, build more workers to harvest and start creating ranged units. Use those units to kite enemies and do not get close enough to engage in melee combat. COUNTERS HEAVY UNITS!\n\n");
         sb.append("GAME STATE:\n");
         sb.append("- Game phase: ").append(gamePhase).append("\n");
         sb.append("- Time: ").append(gs.getTime()).append("/").append(maxCycles).append("\n");
         sb.append("- Your resources: ").append(p.getResources()).append("\n");
+        //sb.append("- Global resources: ").append(pgs.getResources()).append("\n");
         sb.append("- Your forces: ").append(myWorkers).append(" workers, ");
         sb.append(myLight).append(" light, ").append(myHeavy).append(" heavy, ");
         sb.append(myRanged).append(" ranged\n");
@@ -383,22 +458,35 @@ public class hope extends AbstractionLayerAI {
         sb.append("- Your strength: ").append(myStrength).append(", Enemy strength: ");
         sb.append(enemyStrength).append("\n\n");
         sb.append("Enemy appears to be using: ").append(enemyStrategy).append("\n\n");
-        sb.append("COUNTER STRATEGIES (8x8 MAP):\n");
-        sb.append("- If enemy is using WORKER_RUSH: You MUST use WORKER_RUSH_PLUS immediately.\n");
-        sb.append("  * One worker fights to stall, one worker harvests and builds barracks.\n");
-        sb.append("  * Send your second worker directly to fight. Match worker count.\n");
-        sb.append("  * Do NOT use plain WORKER_RUSH — it draws.\n");
-        sb.append("  * WorkerRush beats everything except mirror WorkerRushPlus on 8x8.\n\n");
-        sb.append("- If enemy has BARRACKs but no units yet: Use WORKER_RUSH before Light units pop.\n");
-        sb.append("  * Workers kill building workers, delay enemy tech.\n\n");
-        sb.append("- If enemy has LIGHT units: Switch to RANGED_RUSH if you have Barracks, else WORKER_RUSH.\n\n");
-        sb.append("- If enemy has RANGED units: Mirror RANGED_RUSH. Do not melee.\n\n");
+        if(mapSize <= 8){
+            sb.append("COUNTER STRATEGIES (8x8 MAP):\n");
+            sb.append("- You MUST use WORKER_RUSH immediately.\n");
+            sb.append("  * Send two workers immediately to attack enemy.\n");
+            sb.append("  * Do not spend time getting resources.\n");
+            sb.append("  * Keep making workers and sending them to attack the enemy base.\n");
+            sb.append("  * WORKER_RUSH beats everything on 8x8 except for some TURTLE strategies if workers are not created fast enough and sent to attack enemy base.\n\n");
+        }
+        else if(mapSize > 8)
+        {
+            sb.append("COUNTER STRATEGIES (16x16 or 32x32 MAP):\n");
+            sb.append("- If game phase is EARLY or MID and enemy is using a rush strategy:\n");
+            sb.append("  * HEAVY_RUSH counters LIGHT_RUSH.\n");
+            sb.append("  * LIGHT_RUSH counters RANGED_RUSH.\n");
+            sb.append("  * RANGED_RUSH counters HEAVY_RUSH.\n");
+            sb.append("  * Continue using strategy to win if enemy has losing score even in LATE phase.\n");
+            sb.append("- If game phase is MID or LATE and there are still many resources on the map:\n");
+            sb.append("  * ECONOMY_BOOM works to maintain high resources and build up forces.\n");
+            sb.append("  * BALANCED can work to counter general enemy attacks since they are not favoring one unit over another.\n");
+            sb.append("- If strength is much lower than enemy and enemy is attacking:\n");
+            sb.append("  * TURTLE works to repel enemy attack and hopefully rebound from bad situation.\n");
+            sb.append("  * Remember to begin rebuilding forces as soon as possible and harvest resources while defending BASE at all costs.\n");
+        }
         sb.append("CURRENT GAME PHASE:\n");
         sb.append("- If time < 100 and enemy has more workers fighting: WORKER_RUSH is mandatory.\n");
         sb.append("Current strategy: ").append(currentStrategy).append("\n\n");
         sb.append("Which strategy should we use? Reply with a JSON object containing ONE word for the strategy:\n");
-        sb.append("{\"strategy\": \"WORKER_RUSH\"} or {\"strategy\": \"WORKER_RUSH_PLUS\"} or {\"strategy\": \"LIGHT_RUSH\"} or ");
-        sb.append("{\"strategy\": \"HEAVY_RUSH\"} or {\"strategy\": \"RANGED_RUSH\"}\n");
+        sb.append("{\"strategy\": \"WORKER_RUSH\"} or {\"strategy\": \"ECONOMY_BOOM\"} or {\"strategy\": \"LIGHT_RUSH\"} or ");
+        sb.append("{\"strategy\": \"HEAVY_RUSH\"} or {\"strategy\": \"RANGED_RUSH\"} or {\"strategy\": \"TURTLE\"} or {\"strategy\": \"BALANCED\"}\n");
 
         return sb.toString();
     }
@@ -474,11 +562,13 @@ public class hope extends AbstractionLayerAI {
 
         // Try to find strategy name in plain text
         String upper = response.toUpperCase();
-        if (upper.contains("WORKER_RUSH_PLUS")) return RushStrategy.WORKER_RUSH_PLUS;
         if (upper.contains("WORKER_RUSH")) return RushStrategy.WORKER_RUSH;
         if (upper.contains("LIGHT_RUSH")) return RushStrategy.LIGHT_RUSH;
         if (upper.contains("HEAVY_RUSH")) return RushStrategy.HEAVY_RUSH;
         if (upper.contains("RANGED_RUSH")) return RushStrategy.RANGED_RUSH;
+        if (upper.contains("TURTLE")) return RushStrategy.TURTLE;
+        if (upper.contains("BALANCED")) return RushStrategy.BALANCED;
+        if (upper.contains("ECONOMY_BOOM")) return RushStrategy.ECONOMY_BOOM;
 
         System.out.println("[hope] Could not parse strategy from: " + response);
         return null;
@@ -489,11 +579,13 @@ public class hope extends AbstractionLayerAI {
      */
     private RushStrategy parseStrategyString(String s) {
         switch (s) {
-            case "WORKER_RUSH_PLUS": return RushStrategy.WORKER_RUSH_PLUS;
             case "WORKER_RUSH": return RushStrategy.WORKER_RUSH;
             case "LIGHT_RUSH": return RushStrategy.LIGHT_RUSH;
             case "HEAVY_RUSH": return RushStrategy.HEAVY_RUSH;
             case "RANGED_RUSH": return RushStrategy.RANGED_RUSH;
+            case "TURTLE": return RushStrategy.TURTLE;
+            case "BALANCED": return RushStrategy.BALANCED;
+            case "ECONOMY_BOOM": return RushStrategy.ECONOMY_BOOM;
             default: return null;
         }
     }
