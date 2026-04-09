@@ -1,0 +1,196 @@
+{
+  "date": "2026-03-17T18:59:02.860115",
+  "map": "maps/8x8/basesWorkers8x8.xml",
+  "games_per_pair": 5,
+  "anchors": {
+    "ai.RandomBiasedAI": {
+      "name": "RandomBiasedAI",
+      "weight": 10,
+      "tier": "easy"
+    },
+    "ai.abstraction.HeavyRush": {
+      "name": "HeavyRush",
+      "weight": 20,
+      "tier": "medium-hard"
+    },
+    "ai.abstraction.LightRush": {
+      "name": "LightRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.abstraction.WorkerRush": {
+      "name": "WorkerRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.competition.tiamat.Tiamat": {
+      "name": "Tiamat",
+      "weight": 20,
+      "tier": "hard"
+    },
+    "ai.coac.CoacAI": {
+      "name": "CoacAI",
+      "weight": 20,
+      "tier": "hard"
+    }
+  },
+  "results": [
+    {
+      "agent": "yebot",
+      "score": 69.0,
+      "grade": "C",
+      "per_opponent": {
+        "RandomBiasedAI": {
+          "games": [
+            {
+              "result": "win",
+              "ticks": 390
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 340
+            },
+            {
+              "result": "win",
+              "ticks": 245
+            },
+            {
+              "result": "win",
+              "ticks": 225
+            }
+          ],
+          "weighted_pts": 12.0
+        },
+        "HeavyRush": {
+          "games": [
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            }
+          ],
+          "weighted_pts": 24.0
+        },
+        "LightRush": {
+          "games": [
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            },
+            {
+              "result": "win",
+              "ticks": 195
+            }
+          ],
+          "weighted_pts": 18.0
+        },
+        "WorkerRush": {
+          "games": [
+            {
+              "result": "win",
+              "ticks": 1365
+            },
+            {
+              "result": "win",
+              "ticks": 1365
+            },
+            {
+              "result": "win",
+              "ticks": 1365
+            },
+            {
+              "result": "win",
+              "ticks": 1365
+            },
+            {
+              "result": "win",
+              "ticks": 1365
+            }
+          ],
+          "weighted_pts": 15.0
+        },
+        "Tiamat": {
+          "games": [
+            {
+              "result": "loss",
+              "ticks": 1240
+            },
+            {
+              "result": "loss",
+              "ticks": 1240
+            },
+            {
+              "result": "loss",
+              "ticks": 1240
+            },
+            {
+              "result": "loss",
+              "ticks": 1240
+            },
+            {
+              "result": "loss",
+              "ticks": 1240
+            }
+          ],
+          "weighted_pts": 0.0
+        },
+        "CoacAI": {
+          "games": [
+            {
+              "result": "loss",
+              "ticks": 725
+            },
+            {
+              "result": "loss",
+              "ticks": 725
+            },
+            {
+              "result": "loss",
+              "ticks": 695
+            },
+            {
+              "result": "loss",
+              "ticks": 695
+            },
+            {
+              "result": "loss",
+              "ticks": 725
+            }
+          ],
+          "weighted_pts": 0.0
+        }
+      }
+    }
+  ]
+}

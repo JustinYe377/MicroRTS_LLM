@@ -1,0 +1,316 @@
+{
+  "date": "2026-03-17T07:29:49.686515",
+  "map": "maps/8x8/basesWorkers8x8.xml",
+  "games_per_pair": 10,
+  "anchors": {
+    "ai.RandomBiasedAI": {
+      "name": "RandomBiasedAI",
+      "weight": 10,
+      "tier": "easy"
+    },
+    "ai.abstraction.HeavyRush": {
+      "name": "HeavyRush",
+      "weight": 20,
+      "tier": "medium-hard"
+    },
+    "ai.abstraction.LightRush": {
+      "name": "LightRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.abstraction.WorkerRush": {
+      "name": "WorkerRush",
+      "weight": 15,
+      "tier": "medium"
+    },
+    "ai.competition.tiamat.Tiamat": {
+      "name": "Tiamat",
+      "weight": 20,
+      "tier": "hard"
+    },
+    "ai.coac.CoacAI": {
+      "name": "CoacAI",
+      "weight": 20,
+      "tier": "hard"
+    }
+  },
+  "results": [
+    {
+      "agent": "yebot",
+      "score": 53.8,
+      "grade": "D",
+      "per_opponent": {
+        "RandomBiasedAI": {
+          "games": [
+            {
+              "result": "win",
+              "ticks": 425
+            },
+            {
+              "result": "win",
+              "ticks": 855
+            },
+            {
+              "result": "win",
+              "ticks": 700
+            },
+            {
+              "result": "win",
+              "ticks": 840
+            },
+            {
+              "result": "win",
+              "ticks": 330
+            },
+            {
+              "result": "win",
+              "ticks": 705
+            },
+            {
+              "result": "win",
+              "ticks": 595
+            },
+            {
+              "result": "win",
+              "ticks": 415
+            },
+            {
+              "result": "win",
+              "ticks": 425
+            },
+            {
+              "result": "win",
+              "ticks": 460
+            }
+          ],
+          "weighted_pts": 11.8
+        },
+        "HeavyRush": {
+          "games": [
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            }
+          ],
+          "weighted_pts": 24.0
+        },
+        "LightRush": {
+          "games": [
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            },
+            {
+              "result": "win",
+              "ticks": 295
+            }
+          ],
+          "weighted_pts": 18.0
+        },
+        "WorkerRush": {
+          "games": [
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            }
+          ],
+          "weighted_pts": 0.0
+        },
+        "Tiamat": {
+          "games": [
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            },
+            {
+              "result": "loss",
+              "ticks": 305
+            }
+          ],
+          "weighted_pts": 0.0
+        },
+        "CoacAI": {
+          "games": [
+            {
+              "result": "loss",
+              "ticks": 445
+            },
+            {
+              "result": "loss",
+              "ticks": 380
+            },
+            {
+              "result": "loss",
+              "ticks": 385
+            },
+            {
+              "result": "loss",
+              "ticks": 380
+            },
+            {
+              "result": "loss",
+              "ticks": 375
+            },
+            {
+              "result": "loss",
+              "ticks": 380
+            },
+            {
+              "result": "loss",
+              "ticks": 445
+            },
+            {
+              "result": "loss",
+              "ticks": 375
+            },
+            {
+              "result": "loss",
+              "ticks": 385
+            },
+            {
+              "result": "loss",
+              "ticks": 380
+            }
+          ],
+          "weighted_pts": 0.0
+        }
+      }
+    }
+  ]
+}
