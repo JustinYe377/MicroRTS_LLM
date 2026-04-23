@@ -1,7 +1,7 @@
 /*
- * yebot — Macro-LLM + Rule-based Micro  (v3 — Large Map Overhaul)
+ * yebot — Macro-LLM + Rule-based Micro  
  *
- * Key fixes over v2:
+ * Key fixes.
  *   1. ARMY GROUPING: combat units rally at a staging point and only commit when
  *      we have critical mass (or LLM forces commit). Fixes trickle-attack on large maps.
  *   2. LLM CONTROLS MORE: in addition to strategy, LLM chooses aggression level
@@ -37,7 +37,6 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.*;
 
 public class yebot extends AbstractionLayerAI {
 
@@ -49,10 +48,14 @@ public class yebot extends AbstractionLayerAI {
     // OLLAMA_HOST preferred (base URL, no path). OLLAMA_URL kept for backward compat.
     private static final String OLLAMA_HOST = resolveOllamaHost();
     private static final String API_URL     = OLLAMA_HOST + "/api/generate";
-    private static final int    CONNECT_TIMEOUT = 3000;     // fast-fail if unreachable
-    private static final int    READ_TIMEOUT    = 30000;    // first call loads model
-    private static final int    LLM_INTERVAL    = 200;
-    private static final int    STRATEGY_DECAY  = 600;
+
+
+    private static final int CONNECT_TIMEOUT = 1800;    // matches fortress-bot
+    private static final int READ_TIMEOUT    = 15000;   // matches fortress-bot
+
+    private static final int LLM_INTERVAL       = 200;  // matches fortress-bot (160 + slack)
+    private static final int STRATEGY_DECAY     = 800;
+    private static final int MAX_FAIL_STREAK    = 3;    // after N consecutive fails, disable LLM
 
     private static String resolveOllamaHost() {
         String host = System.getenv("OLLAMA_HOST");
@@ -82,16 +85,8 @@ public class yebot extends AbstractionLayerAI {
     private int    llmAttempts     = 0;
     private int    llmSuccesses    = 0;
     private boolean llmEverWorked  = false;
-
-    // Async LLM: one call in-flight at a time; never blocks getAction.
-    private static final ExecutorService LLM_EXECUTOR =
-            Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "yebot-llm");
-                t.setDaemon(true);
-                return t;
-            });
-    private Future<String> pendingLLM = null;
-    private int            pendingLLMTick = -1;
+    private boolean llmDisabled    = false;    // flip true after repeated failures
+    private int    llmFailStreak   = 0;
 
     // Memoized rally point (recomputed each tick cheaply, but stored for stability)
     private int rallyX = -1, rallyY = -1;
@@ -144,8 +139,8 @@ public class yebot extends AbstractionLayerAI {
         llmAttempts     = 0;
         llmSuccesses    = 0;
         llmEverWorked   = false;
-        if (pendingLLM != null) { pendingLLM.cancel(true); pendingLLM = null; }
-        pendingLLMTick = -1;
+        llmDisabled     = false;
+        llmFailStreak   = 0;
     }
 
     public void reset(UnitTypeTable a_utt) {
@@ -174,49 +169,39 @@ public class yebot extends AbstractionLayerAI {
         // Update rally point each tick (cheap, keeps units grouped near base toward enemy)
         updateRallyPoint(player, pgs);
 
-        // ASYNC LLM: submit a call if due; consume any ready result (never blocks).
+        // Synchronous LLM call on interval. First call may take up to READ_TIMEOUT
+        // to let the model load; subsequent calls hit a warm model and reply fast.
         int interval = adaptiveLLMInterval(pgs);
-
-        // (1) Consume completed result, if any
-        if (pendingLLM != null && pendingLLM.isDone()) {
-            try {
-                String response = pendingLLM.get();  // already done, non-blocking
-                long parseTick = pendingLLMTick;
-                System.out.println("[yebot] t=" + tick + " LLM resolved (submitted t="
-                        + parseTick + "), len=" + (response == null ? 0 : response.length()));
-                if (parseMacroResponse(response)) {
-                    strategySetTick = tick;
-                    llmSuccesses++;
-                    llmEverWorked   = true;
-                    System.out.println("[yebot] t=" + tick
-                            + " LLM OK -> " + macroStrategy
-                            + " agg=" + aggression
-                            + " tgt=" + targetPref
-                            + " (" + llmSuccesses + "/" + llmAttempts + ")");
-                } else {
-                    System.out.println("[yebot] t=" + tick
-                            + " LLM parse FAILED, raw=" + truncate(response, 200));
-                }
-            } catch (CancellationException ce) {
-                System.out.println("[yebot] t=" + tick + " LLM cancelled");
-            } catch (Exception e) {
-                System.out.println("[yebot] t=" + tick + " LLM future exception: "
-                        + e.getClass().getSimpleName() + ": " + e.getMessage());
-            } finally {
-                pendingLLM = null;
-                pendingLLMTick = -1;
-            }
-        }
-
-        // (2) Submit a new call if it's time AND none is in flight
-        if (pendingLLM == null && tick - lastLLMTick >= interval) {
+        if (!llmDisabled && tick - lastLLMTick >= interval) {
             lastLLMTick = tick;
             llmAttempts++;
-            final String stateText = buildMacroStateText(player, gs, pgs);
-            System.out.println("[yebot] t=" + tick + " LLM submit #" + llmAttempts
-                    + " url=" + API_URL + " model=" + OLLAMA_MODEL);
-            pendingLLMTick = tick;
-            pendingLLM = LLM_EXECUTOR.submit(() -> callLLM(stateText));
+            String stateText = buildMacroStateText(player, gs, pgs);
+            long t0 = System.currentTimeMillis();
+            String response = callLLM(stateText);
+            long dt = System.currentTimeMillis() - t0;
+            System.out.println("[yebot] t=" + tick + " LLM call #" + llmAttempts
+                    + " in " + dt + "ms, len=" + (response == null ? 0 : response.length()));
+
+            if (parseMacroResponse(response)) {
+                strategySetTick = tick;
+                llmSuccesses++;
+                llmEverWorked   = true;
+                llmFailStreak   = 0;
+                System.out.println("[yebot] t=" + tick
+                        + " LLM OK -> " + macroStrategy
+                        + " agg=" + aggression
+                        + " tgt=" + targetPref
+                        + " (" + llmSuccesses + "/" + llmAttempts + ")");
+            } else {
+                llmFailStreak++;
+                System.out.println("[yebot] t=" + tick + " LLM parse/call FAILED ("
+                        + llmFailStreak + " in a row), raw=" + truncate(response, 150));
+                if (llmFailStreak >= MAX_FAIL_STREAK) {
+                    llmDisabled = true;
+                    System.out.println("[yebot] t=" + tick + " DISABLING LLM after "
+                            + MAX_FAIL_STREAK + " failures — running on rule-based fallback");
+                }
+            }
         }
 
         // Strategy decay
@@ -1188,11 +1173,15 @@ public class yebot extends AbstractionLayerAI {
     }
 
     /**
-     * Calls Ollama's native /api/generate endpoint.
+     * Ollama /api/generate call.
      * Uses think:false (Qwen3) to skip the reasoning block — saves 2-4s/call.
-     * Separate connect (3s) and read (30s) timeouts so first-call model load doesn't fail.
+     * Timeouts match fortress-bot reference.
      */
     private String callLLM(String stateText) {
+        return doLLMRequest(SYSTEM_PROMPT + "\n\nGAME STATE:\n" + stateText, READ_TIMEOUT);
+    }
+
+    private String doLLMRequest(String prompt, int readTimeoutMs) {
         HttpURLConnection conn = null;
         long t0 = System.currentTimeMillis();
         try {
@@ -1202,14 +1191,11 @@ public class yebot extends AbstractionLayerAI {
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setDoOutput(true);
             conn.setConnectTimeout(CONNECT_TIMEOUT);
-            conn.setReadTimeout(READ_TIMEOUT);
-
-            // /api/generate uses a single "prompt" field; combine system + user.
-            String combinedPrompt = SYSTEM_PROMPT + "\n\nGAME STATE:\n" + stateText;
+            conn.setReadTimeout(readTimeoutMs);
 
             JsonObject req = new JsonObject();
             req.addProperty("model", OLLAMA_MODEL);
-            req.addProperty("prompt", combinedPrompt);
+            req.addProperty("prompt", prompt);
             req.addProperty("stream", false);
             req.addProperty("think", false);          // Qwen3: skip <think> block
             req.addProperty("format", "json");        // force JSON output
@@ -1257,7 +1243,7 @@ public class yebot extends AbstractionLayerAI {
         } catch (java.net.SocketTimeoutException te) {
             long dt = System.currentTimeMillis() - t0;
             System.out.println("[yebot] callLLM: TIMEOUT after " + dt + "ms "
-                    + "(connect=" + CONNECT_TIMEOUT + " read=" + READ_TIMEOUT
+                    + "(connect=" + CONNECT_TIMEOUT + " read=" + readTimeoutMs
                     + ", model=" + OLLAMA_MODEL + ")");
         } catch (java.net.UnknownHostException uhe) {
             System.out.println("[yebot] callLLM: UNKNOWN HOST in " + API_URL);
