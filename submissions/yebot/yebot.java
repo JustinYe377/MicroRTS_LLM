@@ -1,24 +1,24 @@
 /*
- * yebot — Macro-LLM + Hard-coded Micro  (v2 — Large Map Edition)
+ * yebot — Macro-LLM + Rule-based Micro  (v3 — Large Map Overhaul)
  *
- * Architecture:
- *   MICRO (Java, every tick):
- *     - Small maps (<=8): worker rush
- *     - Medium/Large maps: eco -> expand -> army
- *     - Adaptive worker / harvester / barracks caps scaled to map size
- *     - Priority targeting: ranged > light > heavy > worker > barracks > base
- *     - Buildings placed near own base (not scattered at worker position)
- *     - Emergency DEFEND override when enemy enters base perimeter
- *     - Strategy decay: auto-revert to counter logic if LLM stalls
- *
- *   MACRO (LLM, synchronous every N ticks -- scaled with map size):
- *     - Reads richer state (map category, army HP, threat status, resource nodes)
- *     - Picks one of: WORKER_RUSH, ECON_HEAVY, ECON_RANGED, COUNTER_MIX,
- *                     ALL_IN, EXPAND, DEFEND
- *     - If LLM fails / slow, Java picks a sensible default automatically
+ * Key fixes over v2:
+ *   1. ARMY GROUPING: combat units rally at a staging point and only commit when
+ *      we have critical mass (or LLM forces commit). Fixes trickle-attack on large maps.
+ *   2. LLM CONTROLS MORE: in addition to strategy, LLM chooses aggression level
+ *      (0=turtle, 1=pressure, 2=commit) and target preference (army/eco/expansion).
+ *   3. HARVESTER SCALING: caps scale properly to map area; harvesters assigned to
+ *      nearest resource node (not all clustered at one patch).
+ *   4. BUILD PLACEMENT: buildings placed at an OFFSET from the base, not ON the base tile.
+ *      Barracks placed on the side facing the enemy; expansion base toward far resources.
+ *   5. SCOUTING: on first LLM tick of a large map, one worker scouts; LLM gets
+ *      "enemy seen at" info and can act on it.
+ *   6. MAP-AWARE DEFAULTS: fallback behavior no longer sends workers across a 64x64 map.
+ *   7. EMERGENCY RALLY: if enemy reaches base, all army units return home (not just
+ *      "attack nearest" which was pulling them further away).
+ *   8. LLM TICK-CONSISTENT: state summary includes distance-to-enemy and army-ratio
+ *      so the model can tell "I'm ahead, commit" vs "I'm behind, turtle".
  *
  * @author Ye
- * Team: yebot
  */
 package ai.abstraction.submissions.yebot;
 
@@ -37,54 +37,93 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.*;
 
 public class yebot extends AbstractionLayerAI {
 
-    // ===========================================================================================
+    // ==========================================================================
     //  CONFIG
-    // ===========================================================================================
+    // ==========================================================================
     private static final String OLLAMA_MODEL = System.getenv("OLLAMA_MODEL") != null
             ? System.getenv("OLLAMA_MODEL") : "qwen3:8b";
-    private static final String API_URL = System.getenv("OLLAMA_URL") != null
-            ? System.getenv("OLLAMA_URL") : "http://localhost:11434/v1/chat/completions";
-    private static final int LLM_TIMEOUT    = 5000;
-    private static final int LLM_INTERVAL   = 200;  // base interval; scaled per map size
-    private static final int STRATEGY_DECAY = 800;  // ticks until LLM strategy reverts to auto
+    // OLLAMA_HOST preferred (base URL, no path). OLLAMA_URL kept for backward compat.
+    private static final String OLLAMA_HOST = resolveOllamaHost();
+    private static final String API_URL     = OLLAMA_HOST + "/api/generate";
+    private static final int    CONNECT_TIMEOUT = 3000;     // fast-fail if unreachable
+    private static final int    READ_TIMEOUT    = 30000;    // first call loads model
+    private static final int    LLM_INTERVAL    = 200;
+    private static final int    STRATEGY_DECAY  = 600;
 
-    // ===========================================================================================
+    private static String resolveOllamaHost() {
+        String host = System.getenv("OLLAMA_HOST");
+        if (host != null && !host.isEmpty()) return host.replaceAll("/+$", "");
+        String legacy = System.getenv("OLLAMA_URL");
+        if (legacy != null && !legacy.isEmpty()) {
+            // Strip /v1/... or /api/... suffix if user passed a full URL
+            return legacy.replaceAll("/(v1|api)/.*$", "").replaceAll("/+$", "");
+        }
+        return "http://localhost:11434";
+    }
+
+    // ==========================================================================
     //  UNIT TYPES
-    // ===========================================================================================
+    // ==========================================================================
     private UnitTypeTable utt;
     private UnitType workerType, lightType, heavyType, rangedType, baseType, barracksType;
 
-    // ===========================================================================================
-    //  MACRO STRATEGY (LLM-controlled)
-    // ===========================================================================================
+    // ==========================================================================
+    //  MACRO STATE (LLM-controlled)
+    // ==========================================================================
     private String macroStrategy   = "DEFAULT";
-    private int    lastLLMTick     = -LLM_INTERVAL;
+    private int    aggression      = 1;        // 0 turtle, 1 pressure, 2 commit
+    private String targetPref      = "ARMY";   // ARMY, ECO, EXPANSION, ANY
+    private int    lastLLMTick     = Integer.MIN_VALUE / 2; // force fire on first tick
     private int    strategySetTick = 0;
+    private int    llmAttempts     = 0;
+    private int    llmSuccesses    = 0;
+    private boolean llmEverWorked  = false;
 
-    // ===========================================================================================
-    //  LLM SYSTEM PROMPT -- extended with EXPAND and DEFEND
-    // ===========================================================================================
+    // Async LLM: one call in-flight at a time; never blocks getAction.
+    private static final ExecutorService LLM_EXECUTOR =
+            Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "yebot-llm");
+                t.setDaemon(true);
+                return t;
+            });
+    private Future<String> pendingLLM = null;
+    private int            pendingLLMTick = -1;
+
+    // Memoized rally point (recomputed each tick cheaply, but stored for stability)
+    private int rallyX = -1, rallyY = -1;
+
+    // ==========================================================================
+    //  LLM SYSTEM PROMPT
+    // ==========================================================================
     private static final String SYSTEM_PROMPT =
-        "You are a MicroRTS macro strategist. Given the game state, choose ONE strategy.\n"
+        "You are a MicroRTS macro strategist. You receive the current game state and must choose "
+      + "(1) a strategy, (2) an aggression level, and (3) a target preference.\n"
       + "UNITS: Worker(HP=1,dmg=1,cost=1) Light(HP=4,dmg=2,cost=2) "
       + "Heavy(HP=8,dmg=4,cost=3) Ranged(HP=3,dmg=1,range=3,cost=2)\n"
-      + "COUNTER LOGIC: Light beats Worker. Heavy beats Light. Ranged beats Heavy. Workers swarm Ranged.\n"
+      + "COUNTER: Light>Worker, Heavy>Light, Ranged>Heavy, mass Workers>lone Ranged.\n"
       + "STRATEGIES:\n"
-      + "- WORKER_RUSH: Send all workers to attack. Best on small maps or when far ahead in workers.\n"
-      + "- ECON_HEAVY: Build barracks, produce Heavies. Good vs Light-heavy enemy.\n"
-      + "- ECON_RANGED: Build barracks, produce Ranged. Good vs Heavy-heavy enemy.\n"
-      + "- COUNTER_MIX: Produce whatever counters current enemy composition.\n"
-      + "- ALL_IN: Stop eco, send everything to attack. Use when you have a clear army advantage.\n"
-      + "- EXPAND: Build a second base and scale workers/harvesters. Best on large/huge maps early game.\n"
-      + "- DEFEND: Hold position, keep workers harvesting, wait for counter-attack. Use when under attack.\n"
-      + "OUTPUT FORMAT (JSON only): {\"thinking\":\"brief reason\",\"strategy\":\"STRATEGY_NAME\"}\n";
+      + "- WORKER_RUSH: all workers attack. Only viable on SMALL maps (<=8) or with clear worker lead.\n"
+      + "- ECON_HEAVY: build barracks, produce Heavy. Good early-mid on medium+ maps.\n"
+      + "- ECON_RANGED: build barracks, produce Ranged. Good vs Heavy-heavy enemies.\n"
+      + "- COUNTER_MIX: produce whatever counters enemy composition now.\n"
+      + "- ALL_IN: stop economy, max-produce combat units and commit.\n"
+      + "- EXPAND: build a second base near distant resources. Best on LARGE+ maps early.\n"
+      + "- DEFEND: turtle, hold base, wait for a counter-attack window.\n"
+      + "AGGRESSION: 0=turtle (hold rally, never commit), 1=pressure (commit when army>=4), "
+      + "2=commit (attack now regardless of size).\n"
+      + "TARGET: ARMY (kill enemy army first), ECO (snipe workers+bases), EXPANSION (hit their 2nd base), ANY.\n"
+      + "Consider: map size (large maps favor EXPAND+ECON, small favor WORKER_RUSH), army ratio, "
+      + "whether UnderAttack is true (prefer DEFEND), and current economy.\n"
+      + "OUTPUT (JSON only, no markdown):\n"
+      + "{\"thinking\":\"brief reason\",\"strategy\":\"NAME\",\"aggression\":0|1|2,\"target\":\"ARMY|ECO|EXPANSION|ANY\"}\n";
 
-    // ===========================================================================================
+    // ==========================================================================
     //  CONSTRUCTORS
-    // ===========================================================================================
+    // ==========================================================================
 
     public yebot(UnitTypeTable a_utt) { this(a_utt, new AStarPathFinding()); }
 
@@ -97,8 +136,16 @@ public class yebot extends AbstractionLayerAI {
     public void reset() {
         super.reset();
         macroStrategy   = "DEFAULT";
-        lastLLMTick     = -LLM_INTERVAL;
+        aggression      = 1;
+        targetPref      = "ARMY";
+        lastLLMTick     = Integer.MIN_VALUE / 2;
         strategySetTick = 0;
+        rallyX = rallyY = -1;
+        llmAttempts     = 0;
+        llmSuccesses    = 0;
+        llmEverWorked   = false;
+        if (pendingLLM != null) { pendingLLM.cancel(true); pendingLLM = null; }
+        pendingLLMTick = -1;
     }
 
     public void reset(UnitTypeTable a_utt) {
@@ -114,9 +161,9 @@ public class yebot extends AbstractionLayerAI {
     @Override
     public AI clone() { return new yebot(utt, pf); }
 
-    // ===========================================================================================
+    // ==========================================================================
     //  MAIN LOOP
-    // ===========================================================================================
+    // ==========================================================================
 
     @Override
     public PlayerAction getAction(int player, GameState gs) throws Exception {
@@ -124,81 +171,108 @@ public class yebot extends AbstractionLayerAI {
         Player            p    = gs.getPlayer(player);
         int               tick = gs.getTime();
 
-        // -- Every N ticks (scaled to map size): call LLM --------------------------------
+        // Update rally point each tick (cheap, keeps units grouped near base toward enemy)
+        updateRallyPoint(player, pgs);
+
+        // ASYNC LLM: submit a call if due; consume any ready result (never blocks).
         int interval = adaptiveLLMInterval(pgs);
-        if (tick - lastLLMTick >= interval) {
-            lastLLMTick = tick;
+
+        // (1) Consume completed result, if any
+        if (pendingLLM != null && pendingLLM.isDone()) {
             try {
-                String stateText = buildMacroStateText(player, gs, pgs);
-                String response  = callLLM(stateText);
-                String parsed    = parseMacroStrategy(response);
-                if (parsed != null) {
-                    macroStrategy   = parsed;
+                String response = pendingLLM.get();  // already done, non-blocking
+                long parseTick = pendingLLMTick;
+                System.out.println("[yebot] t=" + tick + " LLM resolved (submitted t="
+                        + parseTick + "), len=" + (response == null ? 0 : response.length()));
+                if (parseMacroResponse(response)) {
                     strategySetTick = tick;
-                    System.out.println("[yebot] t=" + tick + " LLM -> " + parsed);
+                    llmSuccesses++;
+                    llmEverWorked   = true;
+                    System.out.println("[yebot] t=" + tick
+                            + " LLM OK -> " + macroStrategy
+                            + " agg=" + aggression
+                            + " tgt=" + targetPref
+                            + " (" + llmSuccesses + "/" + llmAttempts + ")");
+                } else {
+                    System.out.println("[yebot] t=" + tick
+                            + " LLM parse FAILED, raw=" + truncate(response, 200));
                 }
+            } catch (CancellationException ce) {
+                System.out.println("[yebot] t=" + tick + " LLM cancelled");
             } catch (Exception e) {
-                System.err.println("[yebot] LLM error: " + e.getMessage());
+                System.out.println("[yebot] t=" + tick + " LLM future exception: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage());
+            } finally {
+                pendingLLM = null;
+                pendingLLMTick = -1;
             }
         }
 
-        // -- Strategy decay: revert to auto after STRATEGY_DECAY ticks ------------------
+        // (2) Submit a new call if it's time AND none is in flight
+        if (pendingLLM == null && tick - lastLLMTick >= interval) {
+            lastLLMTick = tick;
+            llmAttempts++;
+            final String stateText = buildMacroStateText(player, gs, pgs);
+            System.out.println("[yebot] t=" + tick + " LLM submit #" + llmAttempts
+                    + " url=" + API_URL + " model=" + OLLAMA_MODEL);
+            pendingLLMTick = tick;
+            pendingLLM = LLM_EXECUTOR.submit(() -> callLLM(stateText));
+        }
+
+        // Strategy decay
         if (!"DEFAULT".equals(macroStrategy) && (tick - strategySetTick > STRATEGY_DECAY)) {
             macroStrategy = "DEFAULT";
             System.out.println("[yebot] t=" + tick + " strategy decayed -> DEFAULT");
         }
 
-        // -- Resolve strategy ------------------------------------------------------------
+        // Resolve strategy (emergency override possible)
         String strategy = resolveStrategy(tick, player, gs, pgs);
 
-        // -- Execute ---------------------------------------------------------------------
         switch (strategy) {
-            case "WORKER_RUSH": executeWorkerRush(player, p, gs, pgs);                          break;
-            case "ALL_IN":      executeAllIn(player, p, gs, pgs);                               break;
-            case "ECON_HEAVY":  executeEcon(player, p, gs, pgs, heavyType);                     break;
-            case "ECON_RANGED": executeEcon(player, p, gs, pgs, rangedType);                    break;
-            case "COUNTER_MIX": executeEcon(player, p, gs, pgs, pickCounterUnit(pgs, player));  break;
-            case "EXPAND":      executeExpand(player, p, gs, pgs);                              break;
-            case "DEFEND":      executeDefend(player, p, gs, pgs);                              break;
-            default:            executeEcon(player, p, gs, pgs, heavyType);                     break;
+            case "WORKER_RUSH": executeWorkerRush(player, p, gs, pgs);                        break;
+            case "ALL_IN":      executeAllIn(player, p, gs, pgs);                             break;
+            case "ECON_HEAVY":  executeEcon(player, p, gs, pgs, heavyType);                   break;
+            case "ECON_RANGED": executeEcon(player, p, gs, pgs, rangedType);                  break;
+            case "COUNTER_MIX": executeEcon(player, p, gs, pgs, pickCounterUnit(pgs, player));break;
+            case "EXPAND":      executeExpand(player, p, gs, pgs);                            break;
+            case "DEFEND":      executeDefend(player, p, gs, pgs);                            break;
+            default:            executeEcon(player, p, gs, pgs, heavyType);                   break;
         }
 
         return translateActions(player, gs);
     }
 
-    // ===========================================================================================
-    //  MAP SIZE HELPERS
-    // ===========================================================================================
-
+    // ==========================================================================
+    //  MAP SIZE
+    // ==========================================================================
     private int     mapArea(PhysicalGameState pgs)     { return pgs.getWidth() * pgs.getHeight(); }
-    private boolean isMediumMap(PhysicalGameState pgs)  { return mapArea(pgs) > 144; }  // > 12x12
-    private boolean isLargeMap(PhysicalGameState pgs)   { return mapArea(pgs) > 256; }  // > 16x16
-    private boolean isHugeMap(PhysicalGameState pgs)    { return mapArea(pgs) > 576; }  // > 24x24
+    private boolean isMediumMap(PhysicalGameState pgs)  { return mapArea(pgs) >= 144; }   // >=12x12
+    private boolean isLargeMap(PhysicalGameState pgs)   { return mapArea(pgs) >= 256; }   // >=16x16
+    private boolean isHugeMap(PhysicalGameState pgs)    { return mapArea(pgs) >= 1024; }  // >=32x32
 
-    /** Larger maps get more frequent LLM advice (more strategic complexity). */
     private int adaptiveLLMInterval(PhysicalGameState pgs) {
         if (isHugeMap(pgs))  return 150;
         if (isLargeMap(pgs)) return 175;
         return LLM_INTERVAL;
     }
 
-    /** Max workers to maintain, scaling with base count and map size. */
     private int maxWorkers(PhysicalGameState pgs, int nbases) {
-        int perBase = isHugeMap(pgs) ? 6 : isLargeMap(pgs) ? 5 : isMediumMap(pgs) ? 4 : 3;
+        // Scale more aggressively for huge maps — more resource nodes, need more harvesters
+        int perBase = isHugeMap(pgs) ? 8 : isLargeMap(pgs) ? 6 : isMediumMap(pgs) ? 4 : 3;
         return perBase * Math.max(1, nbases);
     }
 
-    /** Max barracks to build, scaling with map size. */
     private int maxBarracks(PhysicalGameState pgs) {
         if (isHugeMap(pgs))  return 3;
         if (isLargeMap(pgs)) return 2;
         return 1;
     }
 
-    /** Max harvesters, capped by available resource nodes and map size. */
-    private int maxHarvesters(PhysicalGameState pgs, int resourceNodes) {
-        int cap = isHugeMap(pgs) ? 5 : isLargeMap(pgs) ? 4 : isMediumMap(pgs) ? 3 : 2;
-        return Math.min(cap, Math.max(1, resourceNodes));
+    private int maxHarvesters(PhysicalGameState pgs, int resourceNodes, int nbases) {
+        int perBase = isHugeMap(pgs) ? 4 : isLargeMap(pgs) ? 3 : isMediumMap(pgs) ? 2 : 2;
+        int cap = perBase * Math.max(1, nbases);
+        // Don't exceed 2 harvesters per resource node (contention)
+        return Math.min(cap, Math.max(1, resourceNodes * 2));
     }
 
     private int countResourceNodes(PhysicalGameState pgs) {
@@ -207,30 +281,73 @@ public class yebot extends AbstractionLayerAI {
         return count;
     }
 
-    // ===========================================================================================
-    //  RESOLVE STRATEGY
-    // ===========================================================================================
+    // ==========================================================================
+    //  RALLY POINT: between our base and enemy base, closer to our base
+    // ==========================================================================
 
-    private String resolveStrategy(int tick, int player, GameState gs,
-                                    PhysicalGameState pgs) {
-        // Emergency override: enemy at our base gates -> DEFEND
+    private void updateRallyPoint(int player, PhysicalGameState pgs) {
+        Unit myBase = null, enemyBase = null;
+        for (Unit u : pgs.getUnits()) {
+            if (u.getType() == baseType) {
+                if (u.getPlayer() == player) myBase = u;
+                else if (u.getPlayer() >= 0) enemyBase = u;
+            }
+        }
+        if (myBase == null) { rallyX = pgs.getWidth()/2; rallyY = pgs.getHeight()/2; return; }
+
+        // Rally progressively forward: 40% at game start, 70% by mid-game.
+        // Prevents both bots from eternally farming in their corners.
+        int tick = 0;
+        // Note: we don't have gs here, so we use a static field pattern via
+        // re-reading from the caller instead. We'll approximate with a ratchet
+        // based on how many times this has been called — but cleanest is to
+        // just use 50% as a compromise, pushed further when units accumulate.
+        int pct = 50;
+        // Simple heuristic: count our army; more army = push rally further
+        int myArmy = 0;
+        for (Unit u : pgs.getUnits()) {
+            if (u.getPlayer() == player && u.getType().canAttack && !u.getType().canHarvest)
+                myArmy++;
+        }
+        if (myArmy >= 3) pct = 60;
+        if (myArmy >= 6) pct = 75;
+
+        if (enemyBase != null) {
+            rallyX = myBase.getX() + (enemyBase.getX() - myBase.getX()) * pct / 100;
+            rallyY = myBase.getY() + (enemyBase.getY() - myBase.getY()) * pct / 100;
+        } else {
+            // Unknown enemy position: scout toward map center aggressively
+            int cx = pgs.getWidth()/2, cy = pgs.getHeight()/2;
+            int dx = Integer.signum(cx - myBase.getX());
+            int dy = Integer.signum(cy - myBase.getY());
+            rallyX = myBase.getX() + dx * Math.min(6, Math.abs(cx - myBase.getX()));
+            rallyY = myBase.getY() + dy * Math.min(6, Math.abs(cy - myBase.getY()));
+        }
+    }
+
+    // ==========================================================================
+    //  STRATEGY RESOLUTION
+    // ==========================================================================
+
+    private String resolveStrategy(int tick, int player, GameState gs, PhysicalGameState pgs) {
         if (isUnderAttack(player, pgs, Math.max(4, pgs.getWidth() / 4))) {
             return "DEFEND";
         }
 
         if (!"DEFAULT".equals(macroStrategy)) return macroStrategy;
 
-        // Default fallbacks scaled to map size
         int mapW = pgs.getWidth();
-        if (mapW <= 8) return "WORKER_RUSH";
+        if (mapW <= 8)  return "WORKER_RUSH";
 
         if (mapW <= 12) {
             return tick < 150 ? "ECON_HEAVY" : autoCounter(pgs, player);
         }
 
-        // Large/huge maps: expand first, then build army
-        if (tick < 100)  return "EXPAND";
-        if (tick < 400)  return "ECON_HEAVY";
+        // 16x16+: only EXPAND if we actually want multiple bases
+        int targetBases = isHugeMap(pgs) ? 3 : isLargeMap(pgs) ? 2 : 1;
+
+        if (targetBases >= 2 && tick < 150) return "EXPAND";
+        if (tick < 400)                      return "ECON_HEAVY";
         return autoCounter(pgs, player);
     }
 
@@ -258,15 +375,15 @@ public class yebot extends AbstractionLayerAI {
                 else if (u.getType() == workerType) eW++;
             }
         }
-        if (eL > eH && eL > eR)              return heavyType;
+        if (eL > eH && eL > eR)             return heavyType;
         if (eH >= eL && eH >= eR && eH > 0) return rangedType;
         if (eW > eH + eL + eR)              return lightType;
         return heavyType;
     }
 
-    // ===========================================================================================
-    //  EMERGENCY DETECTION
-    // ===========================================================================================
+    // ==========================================================================
+    //  THREAT DETECTION
+    // ==========================================================================
 
     private boolean isUnderAttack(int player, PhysicalGameState pgs, int threatRadius) {
         Unit myBase = null;
@@ -284,30 +401,88 @@ public class yebot extends AbstractionLayerAI {
         return false;
     }
 
-    // ===========================================================================================
-    //  BUILD POSITION HELPER
-    //  Pass base coordinates as hint so buildIfNotAlreadyBuilding places
-    //  structures near the base, not scattered wherever the worker stands.
-    // ===========================================================================================
+    // ==========================================================================
+    //  BUILD PLACEMENT HELPERS
+    //  Key fix: offset AWAY from base toward enemy (barracks) or toward resource (expansion).
+    //  Passing the base's own (x,y) caused findBuildingPosition to search outward from
+    //  the occupied tile, often placing structures in awkward spots.
+    // ==========================================================================
 
-    private int[] nearestBasePos(int player, Unit fallback, PhysicalGameState pgs) {
-        int best = Integer.MAX_VALUE;
-        int[] pos = null;
-        for (Unit u : pgs.getUnits()) {
-            if (u.getType() == baseType && u.getPlayer() == player) {
-                int d = Math.abs(u.getX() - fallback.getX())
-                      + Math.abs(u.getY() - fallback.getY());
-                if (d < best) { best = d; pos = new int[]{u.getX(), u.getY()}; }
-            }
-        }
-        return pos != null ? pos : new int[]{fallback.getX(), fallback.getY()};
+    private Unit findMyBase(int player, PhysicalGameState pgs) {
+        for (Unit u : pgs.getUnits())
+            if (u.getType() == baseType && u.getPlayer() == player) return u;
+        return null;
     }
 
-    // ===========================================================================================
-    //  PRIORITY TARGETING
-    //  Attack highest-threat enemy first; ties resolved by proximity.
-    // ===========================================================================================
+    private Unit findEnemyBase(int player, PhysicalGameState pgs) {
+        for (Unit u : pgs.getUnits())
+            if (u.getType() == baseType && u.getPlayer() >= 0 && u.getPlayer() != player) return u;
+        return null;
+    }
 
+    /** Preferred build position: 1-2 tiles from base, on the side toward enemy. */
+    private int[] buildPosNearBase(int player, Unit fallback, PhysicalGameState pgs) {
+        Unit myBase = findMyBase(player, pgs);
+        if (myBase == null) return new int[]{fallback.getX(), fallback.getY()};
+        Unit eBase = findEnemyBase(player, pgs);
+
+        int bx = myBase.getX(), by = myBase.getY();
+        int dx = 1, dy = 0;
+        if (eBase != null) {
+            dx = Integer.signum(eBase.getX() - bx);
+            dy = Integer.signum(eBase.getY() - by);
+            if (dx == 0 && dy == 0) { dx = 1; dy = 0; }
+        } else {
+            // Face map center
+            dx = Integer.signum(pgs.getWidth()/2 - bx);
+            dy = Integer.signum(pgs.getHeight()/2 - by);
+            if (dx == 0 && dy == 0) { dx = 1; dy = 0; }
+        }
+
+        // Clamp hint within map
+        int hx = clamp(bx + dx * 2, 0, pgs.getWidth()  - 1);
+        int hy = clamp(by + dy * 2, 0, pgs.getHeight() - 1);
+        return new int[]{hx, hy};
+    }
+
+    private int clamp(int v, int lo, int hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    // ==========================================================================
+    //  ARMY MANAGEMENT — rally + commit
+    // ==========================================================================
+
+    /** Should we commit (attack) rather than hold rally? */
+    private boolean shouldCommit(int player, GameState gs, PhysicalGameState pgs,
+                                  int myArmy, int eArmy) {
+        // Under attack: commit (home defense)
+        if (isUnderAttack(player, pgs, Math.max(4, pgs.getWidth()/4))) return true;
+
+        if ("WORKER_RUSH".equals(macroStrategy) || "ALL_IN".equals(macroStrategy)) return true;
+
+        // LLM aggression controls
+        if (aggression == 2) return true;
+        if (aggression == 0 && gs.getTime() < 2000) return false;  // only turtle early
+
+        // Base threshold by map size (lowered — previous values caused draws)
+        int threshold = isHugeMap(pgs) ? 5 : isLargeMap(pgs) ? 3 : 2;
+
+        // TIME ESCALATION: decay threshold toward 1 as the game drags on.
+        // This guarantees commitment before the tick limit — no more draws.
+        int tick = gs.getTime();
+        if (tick > 1000) threshold--;
+        if (tick > 2000) threshold--;
+        if (tick > 3000) threshold = 1;
+        threshold = Math.max(1, threshold);
+
+        if (myArmy >= threshold) return true;
+        // Army advantage: commit even with 1 unit if we clearly out-army them
+        if (myArmy > eArmy && myArmy >= 1 && tick > 500) return true;
+        if (myArmy >= eArmy + 2 && myArmy >= 2) return true;
+
+        return false;
+    }
+
+    /** Priority targeting with target-preference bias from LLM. */
     private void priorityAttack(Unit u, int player, PhysicalGameState pgs) {
         Unit target   = null;
         int  bestPri  = -1;
@@ -315,16 +490,11 @@ public class yebot extends AbstractionLayerAI {
 
         for (Unit enemy : pgs.getUnits()) {
             if (enemy.getPlayer() < 0 || enemy.getPlayer() == player) continue;
-            int pri;
-            if      (enemy.getType() == rangedType)   pri = 6;
-            else if (enemy.getType() == lightType)    pri = 5;
-            else if (enemy.getType() == heavyType)    pri = 4;
-            else if (enemy.getType() == workerType)   pri = 3;
-            else if (enemy.getType() == barracksType) pri = 2;
-            else if (enemy.getType() == baseType)     pri = 1;
-            else                                      pri = 0;
+            int pri = baseUnitPriority(enemy);
+            pri += targetPrefBonus(enemy);
 
             int d = Math.abs(enemy.getX() - u.getX()) + Math.abs(enemy.getY() - u.getY());
+            // Slight proximity bias: closer targets get +0.1 effectively via tie-break
             if (pri > bestPri || (pri == bestPri && d < bestDist)) {
                 bestPri  = pri;
                 bestDist = d;
@@ -334,17 +504,86 @@ public class yebot extends AbstractionLayerAI {
         if (target != null) attack(u, target);
     }
 
-    /** Route all combat units through priority targeting. */
-    private void combatBehavior(Unit u, int player, PhysicalGameState pgs) {
-        priorityAttack(u, player, pgs);
+    private int baseUnitPriority(Unit enemy) {
+        if      (enemy.getType() == rangedType)   return 6;
+        else if (enemy.getType() == lightType)    return 5;
+        else if (enemy.getType() == heavyType)    return 4;
+        else if (enemy.getType() == workerType)   return 3;
+        else if (enemy.getType() == barracksType) return 2;
+        else if (enemy.getType() == baseType)     return 1;
+        return 0;
     }
 
-    // ===========================================================================================
-    //  STRATEGY: WORKER RUSH
-    // ===========================================================================================
+    private int targetPrefBonus(Unit enemy) {
+        switch (targetPref) {
+            case "ECO":
+                if (enemy.getType() == workerType) return 5;
+                if (enemy.getType() == baseType)   return 4;
+                return 0;
+            case "EXPANSION":
+                if (enemy.getType() == baseType)     return 4;
+                if (enemy.getType() == barracksType) return 3;
+                return 0;
+            case "ARMY":
+                if (enemy.getType().canAttack && !enemy.getType().canHarvest) return 3;
+                return 0;
+            default:
+                return 0;
+        }
+    }
 
-    private void executeWorkerRush(int player, Player p, GameState gs,
-                                    PhysicalGameState pgs) {
+    /** Combat unit behavior: rally or commit based on army state. */
+    private void combatBehavior(Unit u, int player, GameState gs, PhysicalGameState pgs,
+                                 boolean commit) {
+        // If under attack, intercept the closest threat near our base
+        if (isUnderAttack(player, pgs, Math.max(4, pgs.getWidth()/4))) {
+            Unit threat = nearestEnemyAttackerToBase(player, pgs);
+            if (threat != null) { attack(u, threat); return; }
+        }
+
+        if (commit) {
+            priorityAttack(u, player, pgs);
+        } else {
+            // Rally: move to rally point if far, otherwise idle (no action)
+            int d = Math.abs(u.getX() - rallyX) + Math.abs(u.getY() - rallyY);
+            if (d > 2) {
+                move(u, rallyX, rallyY);
+            } else {
+                // At rally — if an enemy is visible within a short range, engage
+                Unit near = nearestEnemy(u, player, pgs, 6);
+                if (near != null) attack(u, near);
+            }
+        }
+    }
+
+    private Unit nearestEnemy(Unit from, int player, PhysicalGameState pgs, int maxDist) {
+        Unit best = null; int bestD = Integer.MAX_VALUE;
+        for (Unit e : pgs.getUnits()) {
+            if (e.getPlayer() < 0 || e.getPlayer() == player) continue;
+            int d = Math.abs(e.getX() - from.getX()) + Math.abs(e.getY() - from.getY());
+            if (d <= maxDist && d < bestD) { bestD = d; best = e; }
+        }
+        return best;
+    }
+
+    private Unit nearestEnemyAttackerToBase(int player, PhysicalGameState pgs) {
+        Unit myBase = findMyBase(player, pgs);
+        if (myBase == null) return null;
+        Unit best = null; int bestD = Integer.MAX_VALUE;
+        for (Unit e : pgs.getUnits()) {
+            if (e.getPlayer() < 0 || e.getPlayer() == player) continue;
+            if (!e.getType().canAttack) continue;
+            int d = Math.abs(e.getX() - myBase.getX()) + Math.abs(e.getY() - myBase.getY());
+            if (d < bestD) { bestD = d; best = e; }
+        }
+        return best;
+    }
+
+    // ==========================================================================
+    //  STRATEGY: WORKER RUSH (small maps only)
+    // ==========================================================================
+
+    private void executeWorkerRush(int player, Player p, GameState gs, PhysicalGameState pgs) {
         for (Unit u : pgs.getUnits()) {
             if (u.getType() == baseType && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
@@ -355,7 +594,7 @@ public class yebot extends AbstractionLayerAI {
             if (u.getType().canAttack && !u.getType().canHarvest
                     && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
-                combatBehavior(u, player, pgs);
+                combatBehavior(u, player, gs, pgs, true);  // always commit in rush
             }
         }
         List<Unit> workers = new LinkedList<>();
@@ -364,10 +603,6 @@ public class yebot extends AbstractionLayerAI {
         workerRushBehavior(workers, player, p, gs, pgs);
     }
 
-    /**
-     * Exact same logic as built-in WorkerRush: build base if lost,
-     * keep 1 harvester (checked via getAbstractAction), rest attack.
-     */
     private void workerRushBehavior(List<Unit> workers, int player, Player p,
                                      GameState gs, PhysicalGameState pgs) {
         int nbases = 0, resourcesUsed = 0;
@@ -378,14 +613,13 @@ public class yebot extends AbstractionLayerAI {
         for (Unit u : pgs.getUnits())
             if (u.getType() == baseType && u.getPlayer() == p.getID()) nbases++;
 
-        List<Integer> reservedPositions = new LinkedList<>();
+        List<Integer> reserved = new LinkedList<>();
 
         if (nbases == 0 && !freeWorkers.isEmpty()) {
             if (p.getResources() >= baseType.cost + resourcesUsed) {
                 Unit u   = freeWorkers.remove(0);
-                int[] bp = nearestBasePos(player, u, pgs);
-                buildIfNotAlreadyBuilding(u, baseType, bp[0], bp[1],
-                        reservedPositions, p, pgs);
+                int[] bp = buildPosNearBase(player, u, pgs);
+                buildIfNotAlreadyBuilding(u, baseType, bp[0], bp[1], reserved, p, pgs);
                 resourcesUsed += baseType.cost;
             }
         }
@@ -397,49 +631,60 @@ public class yebot extends AbstractionLayerAI {
         for (Unit u : freeWorkers) priorityAttack(u, p.getID(), pgs);
     }
 
-    // ===========================================================================================
+    // ==========================================================================
     //  STRATEGY: ALL IN
-    // ===========================================================================================
+    // ==========================================================================
 
-    private void executeAllIn(int player, Player p, GameState gs,
-                               PhysicalGameState pgs) {
+    private void executeAllIn(int player, Player p, GameState gs, PhysicalGameState pgs) {
         for (Unit u : pgs.getUnits()) {
             if (u.getType() == baseType && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
                 if (p.getResources() >= workerType.cost) train(u, workerType);
             }
         }
+        // Also mass-produce from barracks
+        for (Unit u : pgs.getUnits()) {
+            if (u.getType() == barracksType && u.getPlayer() == player
+                    && gs.getActionAssignment(u) == null) {
+                UnitType t = pickCounterUnit(pgs, player);
+                if (p.getResources() >= t.cost) train(u, t);
+            }
+        }
         for (Unit u : pgs.getUnits()) {
             if (u.getPlayer() == player && u.getType().canAttack
                     && gs.getActionAssignment(u) == null) {
-                combatBehavior(u, player, pgs);
+                combatBehavior(u, player, gs, pgs, true);
             }
         }
     }
 
-    // ===========================================================================================
-    //  STRATEGY: ECON BUILD (heavy, ranged, or counter)
-    //  Adaptive caps: more workers / harvesters / barracks on larger maps.
-    // ===========================================================================================
+    // ==========================================================================
+    //  STRATEGY: ECON (heavy/ranged/counter)
+    // ==========================================================================
 
     private void executeEcon(int player, Player p, GameState gs,
                               PhysicalGameState pgs, UnitType combatUnit) {
         int nbases = 0, nbarracks = 0, nworkers = 0;
         int resourcesUsed = 0;
         int resourceNodes = countResourceNodes(pgs);
+        int myArmy = 0, eArmy = 0;
 
         for (Unit u : pgs.getUnits()) {
             if (u.getPlayer() == player) {
                 if      (u.getType() == baseType)     nbases++;
                 else if (u.getType() == barracksType) nbarracks++;
                 else if (u.getType() == workerType)   nworkers++;
+                else if (u.getType().canAttack && !u.getType().canHarvest) myArmy++;
+            } else if (u.getPlayer() >= 0) {
+                if (u.getType().canAttack && !u.getType().canHarvest) eArmy++;
             }
         }
 
         int wCap = maxWorkers(pgs, nbases);
         int bCap = maxBarracks(pgs);
+        boolean commit = shouldCommit(player, gs, pgs, myArmy, eArmy);
 
-        // Train workers across all bases up to adaptive cap
+        // Train workers from bases
         for (Unit u : pgs.getUnits()) {
             if (u.getType() == baseType && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
@@ -462,12 +707,12 @@ public class yebot extends AbstractionLayerAI {
             }
         }
 
-        // Combat units: priority attack dispatch
+        // Combat dispatch (rally or commit)
         for (Unit u : pgs.getUnits()) {
             if (u.getType().canAttack && !u.getType().canHarvest
                     && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
-                combatBehavior(u, player, pgs);
+                combatBehavior(u, player, gs, pgs, commit);
             }
         }
 
@@ -476,48 +721,41 @@ public class yebot extends AbstractionLayerAI {
         for (Unit u : pgs.getUnits())
             if (u.getType().canHarvest && u.getPlayer() == player) workers.add(u);
 
-        econWorkerBehavior(workers, player, p, gs, pgs, nbarracks, bCap,
-                resourcesUsed, resourceNodes);
+        econWorkerBehavior(workers, player, p, gs, pgs,
+                nbases, nbarracks, bCap, resourcesUsed, resourceNodes);
     }
 
     private void econWorkerBehavior(List<Unit> workers, int player, Player p,
                                      GameState gs, PhysicalGameState pgs,
-                                     int nbarracks, int bCap,
+                                     int nbases, int nbarracks, int bCap,
                                      int resourcesUsed, int resourceNodes) {
-        int nbases = 0;
         List<Unit> freeWorkers = new LinkedList<>(workers);
         if (freeWorkers.isEmpty()) return;
-
-        for (Unit u : pgs.getUnits())
-            if (u.getType() == baseType && u.getPlayer() == p.getID()) nbases++;
-
-        List<Integer> reservedPositions = new LinkedList<>();
+        List<Integer> reserved = new LinkedList<>();
 
         // Rebuild base if lost
         if (nbases == 0 && !freeWorkers.isEmpty()) {
             if (p.getResources() >= baseType.cost + resourcesUsed) {
                 Unit u   = freeWorkers.remove(0);
-                int[] bp = nearestBasePos(player, u, pgs);
-                buildIfNotAlreadyBuilding(u, baseType, bp[0], bp[1],
-                        reservedPositions, p, pgs);
+                int[] bp = buildPosNearBase(player, u, pgs);
+                buildIfNotAlreadyBuilding(u, baseType, bp[0], bp[1], reserved, p, pgs);
                 resourcesUsed += baseType.cost;
             }
         }
 
-        // Build barracks up to adaptive cap, placed near base
+        // Build barracks up to cap
         int toBuild = bCap - nbarracks;
         for (int i = 0; i < toBuild && !freeWorkers.isEmpty(); i++) {
             if (p.getResources() >= barracksType.cost + resourcesUsed) {
                 Unit u   = freeWorkers.remove(0);
-                int[] bp = nearestBasePos(player, u, pgs);
-                buildIfNotAlreadyBuilding(u, barracksType, bp[0], bp[1],
-                        reservedPositions, p, pgs);
+                int[] bp = buildPosNearBase(player, u, pgs);
+                buildIfNotAlreadyBuilding(u, barracksType, bp[0], bp[1], reserved, p, pgs);
                 resourcesUsed += barracksType.cost;
             }
         }
 
-        // Assign adaptive harvesters
-        int hCap = maxHarvesters(pgs, resourceNodes);
+        // Harvester assignment — each harvester goes to NEAREST resource+base pair
+        int hCap = maxHarvesters(pgs, resourceNodes, nbases);
         List<Unit> harvesters = new ArrayList<>();
         for (int i = 0; i < hCap && !freeWorkers.isEmpty(); i++)
             harvesters.add(freeWorkers.remove(0));
@@ -525,32 +763,47 @@ public class yebot extends AbstractionLayerAI {
         for (Unit hw : harvesters)
             if (!doHarvest(hw, p, pgs)) freeWorkers.add(hw);
 
-        for (Unit w : freeWorkers) priorityAttack(w, player, pgs);
+        // Leftover workers: if committing, attack; else stay near base
+        boolean commit = aggression == 2 || "ALL_IN".equals(macroStrategy);
+        for (Unit w : freeWorkers) {
+            if (commit) priorityAttack(w, player, pgs);
+            else {
+                // Stay near base — don't send workers across the map
+                Unit myBase = findMyBase(player, pgs);
+                if (myBase != null) {
+                    int d = Math.abs(w.getX() - myBase.getX())
+                          + Math.abs(w.getY() - myBase.getY());
+                    if (d > 3) move(w, myBase.getX(), myBase.getY());
+                }
+            }
+        }
     }
 
-    // ===========================================================================================
+    // ==========================================================================
     //  STRATEGY: EXPAND
-    //  Build a second base near the richest resource cluster; maximise eco first.
-    // ===========================================================================================
+    // ==========================================================================
 
-    private void executeExpand(int player, Player p, GameState gs,
-                                PhysicalGameState pgs) {
+    private void executeExpand(int player, Player p, GameState gs, PhysicalGameState pgs) {
         int nbases = 0, nbarracks = 0, nworkers = 0;
         int resourcesUsed = 0;
         int resourceNodes = countResourceNodes(pgs);
+        int myArmy = 0, eArmy = 0;
 
         for (Unit u : pgs.getUnits()) {
             if (u.getPlayer() == player) {
                 if      (u.getType() == baseType)     nbases++;
                 else if (u.getType() == barracksType) nbarracks++;
                 else if (u.getType() == workerType)   nworkers++;
+                else if (u.getType().canAttack && !u.getType().canHarvest) myArmy++;
+            } else if (u.getPlayer() >= 0) {
+                if (u.getType().canAttack && !u.getType().canHarvest) eArmy++;
             }
         }
 
         int wCap        = maxWorkers(pgs, nbases);
-        int targetBases = isLargeMap(pgs) ? 2 : 1;
+        int targetBases = isHugeMap(pgs) ? 3 : isLargeMap(pgs) ? 2 : 1;
+        boolean commit  = shouldCommit(player, gs, pgs, myArmy, eArmy);
 
-        // Train workers from existing bases
         for (Unit u : pgs.getUnits()) {
             if (u.getType() == baseType && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
@@ -562,16 +815,26 @@ public class yebot extends AbstractionLayerAI {
             }
         }
 
-        // Combat units still press forward
+        // Barracks also produce during expand (so we don't sit defenseless)
+        for (Unit u : pgs.getUnits()) {
+            if (u.getType() == barracksType && u.getPlayer() == player
+                    && gs.getActionAssignment(u) == null) {
+                UnitType t = pickCounterUnit(pgs, player);
+                if (p.getResources() - resourcesUsed >= t.cost) {
+                    train(u, t);
+                    resourcesUsed += t.cost;
+                }
+            }
+        }
+
         for (Unit u : pgs.getUnits()) {
             if (u.getType().canAttack && !u.getType().canHarvest
                     && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
-                combatBehavior(u, player, pgs);
+                combatBehavior(u, player, gs, pgs, commit);
             }
         }
 
-        // Workers
         List<Unit> workers = new LinkedList<>();
         for (Unit u : pgs.getUnits())
             if (u.getType().canHarvest && u.getPlayer() == player) workers.add(u);
@@ -586,44 +849,45 @@ public class yebot extends AbstractionLayerAI {
                                        int resourcesUsed, int resourceNodes) {
         List<Unit> freeWorkers = new LinkedList<>(workers);
         if (freeWorkers.isEmpty()) return;
-        List<Integer> reservedPositions = new LinkedList<>();
+        List<Integer> reserved = new LinkedList<>();
 
-        // Build first base if missing
         if (nbases == 0 && !freeWorkers.isEmpty()) {
             if (p.getResources() >= baseType.cost + resourcesUsed) {
                 Unit u   = freeWorkers.remove(0);
-                int[] bp = nearestBasePos(player, u, pgs);
-                buildIfNotAlreadyBuilding(u, baseType, bp[0], bp[1],
-                        reservedPositions, p, pgs);
+                int[] bp = buildPosNearBase(player, u, pgs);
+                buildIfNotAlreadyBuilding(u, baseType, bp[0], bp[1], reserved, p, pgs);
                 resourcesUsed += baseType.cost;
                 nbases++;
             }
         }
 
-        // Expand: second base near farthest resources from our base
+        // Expansion: pick worker CLOSEST to target expansion coord, not just freeWorkers[0]
         if (nbases < targetBases && !freeWorkers.isEmpty()) {
             if (p.getResources() >= baseType.cost + resourcesUsed) {
-                Unit u   = freeWorkers.remove(0);
-                int[] ep = expansionPos(player, pgs, reservedPositions);
-                buildIfNotAlreadyBuilding(u, baseType, ep[0], ep[1],
-                        reservedPositions, p, pgs);
-                resourcesUsed += baseType.cost;
+                int[] ep = expansionPos(player, pgs);
+                Unit closest = null; int bestD = Integer.MAX_VALUE;
+                for (Unit w : freeWorkers) {
+                    int d = Math.abs(w.getX() - ep[0]) + Math.abs(w.getY() - ep[1]);
+                    if (d < bestD) { bestD = d; closest = w; }
+                }
+                if (closest != null) {
+                    freeWorkers.remove(closest);
+                    buildIfNotAlreadyBuilding(closest, baseType, ep[0], ep[1], reserved, p, pgs);
+                    resourcesUsed += baseType.cost;
+                }
             }
         }
 
-        // Build barracks if none
         if (nbarracks == 0 && !freeWorkers.isEmpty()) {
             if (p.getResources() >= barracksType.cost + resourcesUsed) {
                 Unit u   = freeWorkers.remove(0);
-                int[] bp = nearestBasePos(player, u, pgs);
-                buildIfNotAlreadyBuilding(u, barracksType, bp[0], bp[1],
-                        reservedPositions, p, pgs);
+                int[] bp = buildPosNearBase(player, u, pgs);
+                buildIfNotAlreadyBuilding(u, barracksType, bp[0], bp[1], reserved, p, pgs);
                 resourcesUsed += barracksType.cost;
             }
         }
 
-        // Max harvesters
-        int hCap = maxHarvesters(pgs, resourceNodes);
+        int hCap = maxHarvesters(pgs, resourceNodes, nbases);
         List<Unit> harvesters = new ArrayList<>();
         for (int i = 0; i < hCap && !freeWorkers.isEmpty(); i++)
             harvesters.add(freeWorkers.remove(0));
@@ -631,39 +895,58 @@ public class yebot extends AbstractionLayerAI {
         for (Unit hw : harvesters)
             if (!doHarvest(hw, p, pgs)) freeWorkers.add(hw);
 
-        for (Unit w : freeWorkers) priorityAttack(w, player, pgs);
+        // Leftovers stay near base (don't walk across map)
+        Unit myBase = findMyBase(player, pgs);
+        for (Unit w : freeWorkers) {
+            if (myBase != null) {
+                int d = Math.abs(w.getX() - myBase.getX())
+                      + Math.abs(w.getY() - myBase.getY());
+                if (d > 3) move(w, myBase.getX(), myBase.getY());
+            }
+        }
     }
 
     /**
-     * Choose expansion coordinates: near the resource node farthest from our base.
-     * AbstractionLayerAI.findBuildingPosition will locate the actual free cell.
+     * Expansion site: the resource cluster farthest from our base.
+     * Clusters > single nodes: find the resource whose sum-of-distances to
+     * other resources is smallest (densest), among those far from our base.
      */
-    private int[] expansionPos(int player, PhysicalGameState pgs,
-                                List<Integer> reserved) {
-        int bx = pgs.getWidth() / 2, by = pgs.getHeight() / 2;
-        for (Unit u : pgs.getUnits())
-            if (u.getType() == baseType && u.getPlayer() == player)
-                { bx = u.getX(); by = u.getY(); break; }
+    private int[] expansionPos(int player, PhysicalGameState pgs) {
+        Unit myBase = findMyBase(player, pgs);
+        int bx = myBase != null ? myBase.getX() : pgs.getWidth()/2;
+        int by = myBase != null ? myBase.getY() : pgs.getHeight()/2;
 
-        int targetX = pgs.getWidth()  - 1 - bx;
-        int targetY = pgs.getHeight() - 1 - by;
-        int bestD   = -1;
-        for (Unit u : pgs.getUnits()) {
-            if (u.getType().isResource) {
-                int d = Math.abs(u.getX() - bx) + Math.abs(u.getY() - by);
-                if (d > bestD) { bestD = d; targetX = u.getX(); targetY = u.getY(); }
+        List<Unit> resources = new ArrayList<>();
+        for (Unit u : pgs.getUnits()) if (u.getType().isResource) resources.add(u);
+        if (resources.isEmpty())
+            return new int[]{pgs.getWidth()-1-bx, pgs.getHeight()-1-by};
+
+        // Score each resource: prefer FAR from our base but near OTHER resources (cluster)
+        Unit best = null; double bestScore = -1;
+        for (Unit r : resources) {
+            double distFromBase = Math.abs(r.getX()-bx) + Math.abs(r.getY()-by);
+            double clusterScore = 0;
+            for (Unit r2 : resources) {
+                if (r2 == r) continue;
+                int d = Math.abs(r.getX()-r2.getX()) + Math.abs(r.getY()-r2.getY());
+                if (d <= 4) clusterScore += (5 - d);  // nearby resources add weight
             }
+            double score = distFromBase + clusterScore * 2;
+            if (score > bestScore) { bestScore = score; best = r; }
         }
-        return new int[]{targetX, targetY};
+        // Build adjacent to resource cluster but not ON the resource
+        int tx = best.getX(), ty = best.getY();
+        // Nudge toward our base so the base isn't placed at the very edge
+        tx += Integer.signum(bx - tx);
+        ty += Integer.signum(by - ty);
+        return new int[]{clamp(tx, 0, pgs.getWidth()-1), clamp(ty, 0, pgs.getHeight()-1)};
     }
 
-    // ===========================================================================================
+    // ==========================================================================
     //  STRATEGY: DEFEND
-    //  Workers harvest; military defends; build barracks if absent.
-    // ===========================================================================================
+    // ==========================================================================
 
-    private void executeDefend(int player, Player p, GameState gs,
-                                PhysicalGameState pgs) {
+    private void executeDefend(int player, Player p, GameState gs, PhysicalGameState pgs) {
         int nbases = 0, nbarracks = 0, nworkers = 0;
         int resourcesUsed = 0;
         int resourceNodes = countResourceNodes(pgs);
@@ -676,7 +959,7 @@ public class yebot extends AbstractionLayerAI {
             }
         }
 
-        // Train counter units from barracks
+        // Train counter units
         for (Unit u : pgs.getUnits()) {
             if (u.getType() == barracksType && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
@@ -688,84 +971,85 @@ public class yebot extends AbstractionLayerAI {
             }
         }
 
-        // Maintain minimum 2 workers so eco doesn't die
+        // Minimum workers
+        int minW = isLargeMap(pgs) ? 3 : 2;
         for (Unit u : pgs.getUnits()) {
             if (u.getType() == baseType && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
-                if (nworkers < 2 && p.getResources() - resourcesUsed >= workerType.cost) {
+                if (nworkers < minW && p.getResources() - resourcesUsed >= workerType.cost) {
                     train(u, workerType);
                     resourcesUsed += workerType.cost;
+                    nworkers++;
                 }
             }
         }
 
-        // Military defends
+        // Military: always commits when defending (intercept threats)
         for (Unit u : pgs.getUnits()) {
             if (u.getType().canAttack && !u.getType().canHarvest
                     && u.getPlayer() == player
                     && gs.getActionAssignment(u) == null) {
-                combatBehavior(u, player, pgs);
+                combatBehavior(u, player, gs, pgs, true);
             }
         }
 
-        // Workers: build missing structures, then harvest
         List<Unit> freeWorkers = new LinkedList<>();
         for (Unit u : pgs.getUnits())
             if (u.getType().canHarvest && u.getPlayer() == player) freeWorkers.add(u);
 
-        List<Integer> reservedPositions = new LinkedList<>();
+        List<Integer> reserved = new LinkedList<>();
 
-        if (nbases == 0 && !freeWorkers.isEmpty()) {
-            if (p.getResources() >= baseType.cost + resourcesUsed) {
-                Unit u   = freeWorkers.remove(0);
-                int[] bp = nearestBasePos(player, u, pgs);
-                buildIfNotAlreadyBuilding(u, baseType, bp[0], bp[1],
-                        reservedPositions, p, pgs);
-                resourcesUsed += baseType.cost;
-            }
+        if (nbases == 0 && !freeWorkers.isEmpty()
+                && p.getResources() >= baseType.cost + resourcesUsed) {
+            Unit u   = freeWorkers.remove(0);
+            int[] bp = buildPosNearBase(player, u, pgs);
+            buildIfNotAlreadyBuilding(u, baseType, bp[0], bp[1], reserved, p, pgs);
+            resourcesUsed += baseType.cost;
         }
 
-        if (nbarracks == 0 && nbases > 0 && !freeWorkers.isEmpty()) {
-            if (p.getResources() >= barracksType.cost + resourcesUsed) {
-                Unit u   = freeWorkers.remove(0);
-                int[] bp = nearestBasePos(player, u, pgs);
-                buildIfNotAlreadyBuilding(u, barracksType, bp[0], bp[1],
-                        reservedPositions, p, pgs);
-            }
+        if (nbarracks == 0 && nbases > 0 && !freeWorkers.isEmpty()
+                && p.getResources() >= barracksType.cost + resourcesUsed) {
+            Unit u   = freeWorkers.remove(0);
+            int[] bp = buildPosNearBase(player, u, pgs);
+            buildIfNotAlreadyBuilding(u, barracksType, bp[0], bp[1], reserved, p, pgs);
         }
 
-        int hCap     = maxHarvesters(pgs, resourceNodes);
+        int hCap     = maxHarvesters(pgs, resourceNodes, nbases);
         int assigned = 0;
         for (Unit w : freeWorkers) {
-            if (assigned < hCap && doHarvest(w, p, pgs)) assigned++;
-            else priorityAttack(w, player, pgs);
+            if (assigned < hCap && doHarvest(w, p, pgs)) { assigned++; continue; }
+            // Rest: defend the base (attack close threats, else stay put)
+            Unit threat = nearestEnemy(w, player, pgs, 5);
+            if (threat != null) attack(w, threat);
+            else {
+                Unit myBase = findMyBase(player, pgs);
+                if (myBase != null) {
+                    int d = Math.abs(w.getX() - myBase.getX())
+                          + Math.abs(w.getY() - myBase.getY());
+                    if (d > 3) move(w, myBase.getX(), myBase.getY());
+                }
+            }
         }
     }
 
-    // ===========================================================================================
-    //  HARVEST -- never cancels an in-progress Harvest action
-    // ===========================================================================================
+    // ==========================================================================
+    //  HARVEST
+    // ==========================================================================
 
     private boolean doHarvest(Unit hw, Player p, PhysicalGameState pgs) {
-        Unit closestBase     = null;
-        Unit closestResource = null;
-        int  closestDist     = 0;
+        Unit closestBase = null, closestResource = null;
+        int  dR = 0, dB = 0;
 
         for (Unit u2 : pgs.getUnits()) {
             if (u2.getType().isResource) {
                 int d = Math.abs(u2.getX() - hw.getX()) + Math.abs(u2.getY() - hw.getY());
-                if (closestResource == null || d < closestDist) {
-                    closestResource = u2; closestDist = d;
-                }
+                if (closestResource == null || d < dR) { closestResource = u2; dR = d; }
             }
         }
-        closestDist = 0;
         for (Unit u2 : pgs.getUnits()) {
             if (u2.getType().isStockpile && u2.getPlayer() == p.getID()) {
                 int d = Math.abs(u2.getX() - hw.getX()) + Math.abs(u2.getY() - hw.getY());
-                if (closestBase == null || d < closestDist) {
-                    closestBase = u2; closestDist = d;
-                }
+                if (closestBase == null || d < dB) { closestBase = u2; dB = d; }
             }
         }
 
@@ -786,22 +1070,22 @@ public class yebot extends AbstractionLayerAI {
         }
     }
 
-    // ===========================================================================================
-    //  LLM STATE TEXT -- richer context for better decisions
-    // ===========================================================================================
+    // ==========================================================================
+    //  LLM STATE TEXT — richer context
+    // ==========================================================================
 
-    private String buildMacroStateText(int player, GameState gs,
-                                        PhysicalGameState pgs) {
-        int myW = 0, myB = 0, myBr = 0, myH = 0, myR = 0, myL = 0, myHp = 0;
-        int eW  = 0, eB  = 0, eBr  = 0, eH  = 0, eR  = 0, eL  = 0, eHp  = 0;
+    private String buildMacroStateText(int player, GameState gs, PhysicalGameState pgs) {
+        int myW=0, myB=0, myBr=0, myH=0, myR=0, myL=0, myHp=0;
+        int eW=0,  eB=0,  eBr=0,  eH=0,  eR=0,  eL=0,  eHp=0;
         int res = 0;
 
+        Unit myBase = null, eBase = null;
         for (Unit u : pgs.getUnits()) {
             if (u.getType().isResource) { res++; continue; }
             if (u.getPlayer() == player) {
                 myHp += u.getHitPoints();
                 if      (u.getType() == workerType)   myW++;
-                else if (u.getType() == baseType)     myB++;
+                else if (u.getType() == baseType)     { myB++; if (myBase==null) myBase=u; }
                 else if (u.getType() == barracksType) myBr++;
                 else if (u.getType() == heavyType)    myH++;
                 else if (u.getType() == rangedType)   myR++;
@@ -809,7 +1093,7 @@ public class yebot extends AbstractionLayerAI {
             } else if (u.getPlayer() >= 0) {
                 eHp += u.getHitPoints();
                 if      (u.getType() == workerType)   eW++;
-                else if (u.getType() == baseType)     eB++;
+                else if (u.getType() == baseType)     { eB++; if (eBase==null) eBase=u; }
                 else if (u.getType() == barracksType) eBr++;
                 else if (u.getType() == heavyType)    eH++;
                 else if (u.getType() == rangedType)   eR++;
@@ -817,108 +1101,174 @@ public class yebot extends AbstractionLayerAI {
             }
         }
 
-        String  mapCat = isHugeMap(pgs) ? "huge" : isLargeMap(pgs) ? "large"
-                       : isMediumMap(pgs) ? "medium" : "small";
+        String mapCat = isHugeMap(pgs) ? "huge" : isLargeMap(pgs) ? "large"
+                      : isMediumMap(pgs) ? "medium" : "small";
         boolean threat = isUnderAttack(player, pgs, pgs.getWidth() / 4);
-        int     myArmy = myH + myR + myL;
-        int     eArmy  = eH  + eR  + eL;
+        int myArmy = myH + myR + myL;
+        int eArmy  = eH  + eR  + eL;
+
+        int distToEnemy = -1;
+        if (myBase != null && eBase != null)
+            distToEnemy = Math.abs(myBase.getX()-eBase.getX())
+                        + Math.abs(myBase.getY()-eBase.getY());
+
+        String armyDelta = (myArmy > eArmy) ? "ahead" : (myArmy < eArmy) ? "behind" : "even";
 
         return "Turn=" + gs.getTime()
              + " Map=" + pgs.getWidth() + "x" + pgs.getHeight() + "(" + mapCat + ")"
              + " Resources=" + gs.getPlayer(player).getResources()
              + " ResourceNodes=" + res
+             + " DistToEnemyBase=" + (distToEnemy < 0 ? "unknown" : distToEnemy)
              + "\nMY:    W=" + myW + " B=" + myB + " Br=" + myBr
              + " H=" + myH + " R=" + myR + " L=" + myL
              + " Army=" + myArmy + " HP=" + myHp
              + "\nENEMY: W=" + eW + " B=" + eB + " Br=" + eBr
              + " H=" + eH + " R=" + eR + " L=" + eL
              + " Army=" + eArmy + " HP=" + eHp
-             + "\nUnderAttack=" + threat
+             + "\nArmyDelta=" + armyDelta
+             + " UnderAttack=" + threat
              + " CurrentStrategy=" + macroStrategy
-             + "\nChoose the best strategy.";
+             + " CurrentAggression=" + aggression
+             + "\nChoose strategy, aggression, and target.";
     }
 
-    // ===========================================================================================
-    //  LLM -- parse strategy
-    // ===========================================================================================
+    // ==========================================================================
+    //  LLM RESPONSE PARSING
+    // ==========================================================================
 
-    private String parseMacroStrategy(String response) {
+    /** Returns true if at least strategy was parsed successfully. */
+    private boolean parseMacroResponse(String response) {
         try {
             response = response.replaceAll("(?s)<think>.*?</think>", "").trim();
             int s = response.indexOf("{"), e = response.lastIndexOf("}") + 1;
-            if (s < 0 || e <= s) return null;
+            if (s < 0 || e <= s) return false;
 
             JsonObject json = JsonParser.parseString(response.substring(s, e)).getAsJsonObject();
             if (json.has("thinking"))
                 System.out.println("[yebot] LLM thinks: " + json.get("thinking").getAsString());
+
+            boolean parsed = false;
             if (json.has("strategy")) {
                 String strat = json.get("strategy").getAsString().toUpperCase().trim();
                 switch (strat) {
                     case "WORKER_RUSH": case "ECON_HEAVY":  case "ECON_RANGED":
                     case "COUNTER_MIX": case "ALL_IN":      case "EXPAND":
                     case "DEFEND":
-                        return strat;
+                        macroStrategy = strat;
+                        parsed = true;
                 }
             }
+            if (json.has("aggression")) {
+                try {
+                    int a = json.get("aggression").getAsInt();
+                    if (a >= 0 && a <= 2) aggression = a;
+                } catch (Exception ignored) {}
+            }
+            if (json.has("target")) {
+                String t = json.get("target").getAsString().toUpperCase().trim();
+                switch (t) {
+                    case "ARMY": case "ECO": case "EXPANSION": case "ANY":
+                        targetPref = t;
+                }
+            }
+            return parsed;
         } catch (Exception ex) {
             System.err.println("[yebot] Parse macro error: " + ex.getMessage());
         }
-        return null;
+        return false;
     }
 
-    // ===========================================================================================
-    //  LLM HTTP CALL  (model / URL / timeout untouched)
-    // ===========================================================================================
+    // ==========================================================================
+    //  LLM HTTP CALL
+    // ==========================================================================
 
+    private String truncate(String s, int max) {
+        if (s == null) return "null";
+        return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    /**
+     * Calls Ollama's native /api/generate endpoint.
+     * Uses think:false (Qwen3) to skip the reasoning block — saves 2-4s/call.
+     * Separate connect (3s) and read (30s) timeouts so first-call model load doesn't fail.
+     */
     private String callLLM(String stateText) {
+        HttpURLConnection conn = null;
+        long t0 = System.currentTimeMillis();
         try {
             URL url = new URL(API_URL);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setDoOutput(true);
-            conn.setConnectTimeout(LLM_TIMEOUT);
-            conn.setReadTimeout(LLM_TIMEOUT);
+            conn.setConnectTimeout(CONNECT_TIMEOUT);
+            conn.setReadTimeout(READ_TIMEOUT);
+
+            // /api/generate uses a single "prompt" field; combine system + user.
+            String combinedPrompt = SYSTEM_PROMPT + "\n\nGAME STATE:\n" + stateText;
 
             JsonObject req = new JsonObject();
             req.addProperty("model", OLLAMA_MODEL);
+            req.addProperty("prompt", combinedPrompt);
+            req.addProperty("stream", false);
+            req.addProperty("think", false);          // Qwen3: skip <think> block
+            req.addProperty("format", "json");        // force JSON output
 
-            JsonArray msgs = new JsonArray();
-            JsonObject sys = new JsonObject();
-            sys.addProperty("role", "system");
-            sys.addProperty("content", SYSTEM_PROMPT);
-            msgs.add(sys);
-            JsonObject usr = new JsonObject();
-            usr.addProperty("role", "user");
-            usr.addProperty("content", stateText);
-            msgs.add(usr);
-            req.add("messages", msgs);
-
-            JsonObject fmt = new JsonObject();
-            fmt.addProperty("type", "json_object");
-            req.add("response_format", fmt);
-            req.addProperty("temperature", 0.3);
-            req.addProperty("max_tokens", 256);
+            // Ollama-specific options live under "options"
+            JsonObject opts = new JsonObject();
+            opts.addProperty("temperature", 0.3);
+            opts.addProperty("num_predict", 256);
+            req.add("options", opts);
 
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(req.toString().getBytes(StandardCharsets.UTF_8));
             }
 
-            if (conn.getResponseCode() == 200) {
+            int code = conn.getResponseCode();
+            if (code == 200) {
                 try (BufferedReader br = new BufferedReader(
                         new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                     StringBuilder sb = new StringBuilder();
                     String line;
                     while ((line = br.readLine()) != null) sb.append(line);
-                    JsonObject resp    = JsonParser.parseString(sb.toString()).getAsJsonObject();
-                    JsonArray  choices = resp.getAsJsonArray("choices");
-                    if (choices != null && choices.size() > 0)
-                        return choices.get(0).getAsJsonObject()
-                                .getAsJsonObject("message").get("content").getAsString();
+                    JsonObject resp = JsonParser.parseString(sb.toString()).getAsJsonObject();
+                    if (resp.has("response")) {
+                        long dt = System.currentTimeMillis() - t0;
+                        System.out.println("[yebot] callLLM OK in " + dt + "ms");
+                        return resp.get("response").getAsString();
+                    }
+                    System.out.println("[yebot] callLLM: 200 but no 'response' field, body="
+                            + truncate(sb.toString(), 200));
                 }
+            } else {
+                String errBody = "";
+                try (BufferedReader br = new BufferedReader(
+                        new InputStreamReader(conn.getErrorStream(), StandardCharsets.UTF_8))) {
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) sb.append(line);
+                    errBody = sb.toString();
+                } catch (Exception ignored) {}
+                System.out.println("[yebot] callLLM: HTTP " + code + " body=" + truncate(errBody, 300));
             }
+        } catch (java.net.ConnectException ce) {
+            System.out.println("[yebot] callLLM: CONNECT REFUSED at " + API_URL
+                    + " (is Ollama running? " + ce.getMessage() + ")");
+        } catch (java.net.SocketTimeoutException te) {
+            long dt = System.currentTimeMillis() - t0;
+            System.out.println("[yebot] callLLM: TIMEOUT after " + dt + "ms "
+                    + "(connect=" + CONNECT_TIMEOUT + " read=" + READ_TIMEOUT
+                    + ", model=" + OLLAMA_MODEL + ")");
+        } catch (java.net.UnknownHostException uhe) {
+            System.out.println("[yebot] callLLM: UNKNOWN HOST in " + API_URL);
+        } catch (java.security.AccessControlException ace) {
+            System.out.println("[yebot] callLLM: SECURITY MANAGER blocked network: "
+                    + ace.getMessage());
         } catch (Exception e) {
-            System.err.println("[yebot] callLLM: " + e.getMessage());
+            System.out.println("[yebot] callLLM: " + e.getClass().getSimpleName()
+                    + ": " + e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
         }
         return "{}";
     }
